@@ -380,7 +380,7 @@ class GraphWidget(QtGui.QWidget):
         if val == None:
             currPar = None
         else:
-        currPar = self.par
+            currPar = self.par
 
     def _almost_equal(self, a, b, rel_tol=5e-2, abs_tol=0.0):
         '''Takes two values return true if they are almost equal'''

@@ -16,4 +16,5 @@ nosetests.xml
 
 # Developer tools
 .ropeproject
+.vscode/
 *~
