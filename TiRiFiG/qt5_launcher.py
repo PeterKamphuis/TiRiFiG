@@ -1,4 +1,3 @@
-usr/bin/env python
 # -*- coding: UTF-8 -*-
 #########################################################################################
 # Author: Samuel (samueltwum1@gmail.com) with MSc supervisors                           #
@@ -255,7 +254,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 # from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 import matplotlib.pyplot as plt
 from matplotlib import style
-style.use("seaborn")
+style.use("seaborn-v0_8")
 from PyQt5 import QtCore, QtWidgets
 
 currPar = None
@@ -1145,7 +1144,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 else:
                     if (len(parVal) > 0 and not self.strType(parVal[0]) == 'str' and
                             not self.strType(parVal[-1]) == 'str' and
-                            not self.strType(parVal[len(parVal) / 2]) == 'str'):
+                            not self.strType(parVal[int(len(parVal) / 2)]) == 'str'):
                         if (len(parVal) == self.NUR or lineVals[0].upper() in
                                 fit_par.keys()):
                             if lineVals[0].upper() == 'RADI':
@@ -1173,6 +1172,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         global fit_par
         data = self.getData()
+        self.getParameter(data)
         try:
             self.getParameter(data)
         except:
@@ -1262,7 +1262,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.gwObjects[-1].btnEditParam.clicked.connect(
                         self.editParaObj)
                     # TODO we should also probably set the minimum size for the scroll layout
-                    self.gwObjects[-1].setMinimumSize(self.scrollWidth/2, self.scrollHeight/2)
+                    self.gwObjects[-1].setMinimumSize(int(self.scrollWidth/2), int(self.scrollHeight/2))
                     if key in self.par:
                         g_w_to_plot[key] = self.gwObjects[-1]
 
