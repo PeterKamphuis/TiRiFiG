@@ -20,11 +20,10 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Astronomy",
 ]
-dependencies = [  'numpy>=1.14',
-    'matplotlib',
+dependencies = [  
     'pyqt6',
     'pyFAT-astro',
-    
+        
 ]
 
 [project.urls]
