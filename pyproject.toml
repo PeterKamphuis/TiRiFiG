@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "TiRiFiG"
 dynamic = ["version"]
 description = "Development Status :: 4 - Beta"
-readme = "README.md"
+readme = "README.rst"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.8"
 authors = [
@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [  'numpy>=1.14',
     'matplotlib',
-    'pyqt5',
+    'pyqt6',
     'pyFAT-astro',
     
 ]
@@ -31,7 +31,7 @@ dependencies = [  'numpy>=1.14',
 Homepage = "https://github.com/PeterKamphuis/TiRiFiG"
 
 [project.scripts]
-TiRiFiG = "TiRiFiG.TiRiFiC_launcher:main"
+TiRiFiG = "TiRiFiG.TiRiFiG_launcher:main"
 
 
 [tool.hatch.version]

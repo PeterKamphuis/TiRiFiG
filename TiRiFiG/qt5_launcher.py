@@ -64,6 +64,7 @@ classes:
             btnAddParam    (QPushButton):  add a new plotted parameter to viewgraph.
             btnEditParam   (QPushButton):  change the parameter plotted to another
                                            parameter.
+            btnCloseParam  (QPushButton):  close the parameter selection dialog.
 
         Functions:
             __init__:                      initialises instance variables and starts
@@ -255,7 +256,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
 from matplotlib import style
 style.use("seaborn-v0_8")
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtWidgets,QtGui
 
 currPar = None
 selected_option = None
@@ -316,8 +317,8 @@ class GraphWidget(QtWidgets.QWidget):
     mDblPress = [None, None]
     last_value = 0
 
-    def __init__(self, xScale, yScale, unitMeas, par, parVals, parValRADI,
-                 historyList, key, numPrecisionX, numPrecisionY):
+    def __init__(self, xScale, yScale, unitMeas, par, parVals,parValsErr, parValRADI,
+            key, numPrecisionX, numPrecisionY,initial_width,initial_height):
         super(GraphWidget, self).__init__()
         self.xScale = xScale
         self.yScale = yScale
@@ -325,7 +326,8 @@ class GraphWidget(QtWidgets.QWidget):
         self.par = par
         self.parVals = parVals
         self.parValRADI = parValRADI
-        self.historyList = historyList
+        #at initialsation this is the same as parVals
+        self.historyList = [parVals]
         self.key = key
         self.numPrecisionX = numPrecisionX
         self.numPrecisionY = numPrecisionY
@@ -350,26 +352,38 @@ class GraphWidget(QtWidgets.QWidget):
         self.ax = self.figure.add_subplot(111)
 
         # button to add another tilted-ring parameter to plot
-        self.btnAddParam = QtWidgets.QPushButton('&Add',self)
-        self.btnAddParam.setFixedSize(50, 30)
-        self.btnAddParam.setFlat(True)
+        #self.btnAddParam = QtWidgets.QPushButton('&Add',self)
+        #self.btnAddParam.setFixedSize(50, 30)
+        #self.btnAddParam.setFlat(True)
         # FIX ME: use icon instead of text
         # self.btnAddParam.setIcon(QtGui.QIcon('utilities/icons/plus.png'))
-        self.btnAddParam.setToolTip('Add Parameter')
+        #self.btnAddParam.setToolTip('Add Parameter')
 
         # modify plotted parameter
-        self.btnEditParam = QtWidgets.QPushButton('&Change',self)
-        self.btnEditParam.setFixedSize(80, 30)
-        self.btnEditParam.setFlat(True)
+        self.btnEditParam = QtWidgets.QPushButton(' &Change Parameter',self)
+        self.btnEditParam.setFixedSize(int(initial_width*0.1), int(initial_height*0.03))
+        #self.btnEditParam.setFlat(True)
+          # FIX ME: use icon instead of text
+        self.btnEditParam.setIcon(QtGui.QIcon(QtGui.QPixmap(
+            '/home/peter/GitHub/TiRiFiG/TiRiFiG/utilities/icons/edit.png')))
+        #self.btnEditParam.setToolTip('Modify plotted parameter')
+
+        self.btnCloseParam = QtWidgets.QPushButton('',self)
+        self.btnCloseParam.setFixedSize(int(40), int(40))
+        self.btnCloseParam.setIcon(QtGui.QIcon(QtGui.QPixmap(
+            '/home/peter/GitHub/TiRiFiG/TiRiFiG/utilities/icons/close.jpeg')))
+        #self.btnCloseParam.setFlat(True)
         # FIX ME: use icon instead of text
         # self.btnEditParam.setIcon(QtGui.QIcon('utilities/icons/edit.png'))
         self.btnEditParam.setToolTip('Modify plotted parameter')
 
         hbox = QtWidgets.QHBoxLayout()
-        hbox.addWidget(self.btnAddParam)
+        hbox_right = QtWidgets.QHBoxLayout()
+        #hbox.addWidget(self.btnAddParam)
         hbox.addWidget(self.btnEditParam)
-
+        hbox_right.addWidget(self.btnCloseParam)
         grid.addLayout(hbox, 0, 0)
+        grid.addLayout(hbox_right, 0, 1)
         grid.addWidget(self.canvas, 2, 0, 1, 2)
 
         self.firstPlot()
@@ -859,20 +873,29 @@ class MainWindow(QtWidgets.QMainWindow):
     NUR = 0
     data = []
     parVals = {}
+    parValsErr = {}
     historyList = {}
     xScale = [0, 0]
     yScale = {'VROT':[0, 0]}
     mPress = [-5]
     mRelease = ['None']
     mMotion = [-5]
+    initial_size = 0.75
 
     def __init__(self):
         super(MainWindow, self).__init__()
         self.initUI()
-
-
+        monitors = QtWidgets.QDesktopWidget().screenGeometry(-1)
+        self.initial_width = monitors.width()*self.initial_size
+        self.initial_height = monitors.height()*self.initial_size
+        self.resize(int(self.initial_width), 
+            int(self.initial_height))
+        _center(self)
+        QtCore.QTimer.singleShot(100, self.openDef)
+    
     def initUI(self):
-        self.showMaximized()
+        #self.showMaximized()
+        
         self.setWindowTitle('TiRiFiG')
         # define a widget sitting in the main window where all other widgets will live
         central_widget = QtWidgets.QWidget()
@@ -882,11 +905,11 @@ class MainWindow(QtWidgets.QMainWindow):
         central_widget.setLayout(vertical_layout)
         # add the buttons and the scroll area which will have the graph widgets
         # open button
-        btnOpen = QtWidgets.QPushButton('&Open File')
-        btnOpen.setFixedSize(80, 30)
-        btnOpen.setToolTip('Open .def file')
-        btnOpen.clicked.connect(self.openDef)
-        vertical_layout.addWidget(btnOpen)
+        #btnOpen = QtWidgets.QPushButton('&Open File')
+        #btnOpen.setFixedSize(80, 30)
+        #btnOpen.setToolTip('Open .def file')
+        #btnOpen.clicked.connect(self.openDef)
+        #vertical_layout.addWidget(btnOpen)
         # scroll area
         scroll_area = QtWidgets.QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -947,7 +970,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scaleMan.setStatusTip('Manages behaviour of scale and min and max values')
         self.scaleMan.triggered.connect(self.SMobj)
 
-        self.paraDef = QtWidgets.QAction("&Parameter Definition", self)
+        self.paraDef = QtWidgets.QAction("&Add Parameter", self)
         # self.paraDef.setStatusTip('Determines which parameter is plotted')
         self.paraDef.triggered.connect(self.add_parameter_dialog)
 
@@ -968,9 +991,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.runMenu.addAction(self.openTextEditor)
         self.runMenu.addAction(self.startTF)
 
+        self.paramMenu = mainMenu.addMenu('&Parameters')
+        self.paramMenu.addAction(self.paraDef)
+        
         self.prefMenu = mainMenu.addMenu('&Preferences')
         self.prefMenu.addAction(self.scaleMan)
-        self.prefMenu.addAction(self.paraDef)
+        #self.prefMenu.addAction(self.paraDef)
         self.prefMenu.addAction(self.winSpec)
 
     def quitApp(self):
@@ -1130,17 +1156,24 @@ class MainWindow(QtWidgets.QMainWindow):
                     parVal = lineVals[1].split()
                     self.NUR = int(parVal[0])
                     break
-
+             
         for i in data:
             lineVals = i.split("=")
             if len(lineVals) > 1:
                 lineVals[0] = ''.join(lineVals[0].split())
                 parVal = lineVals[1].split()
-
+              
+              
                 if lineVals[0].upper() == "INSET":
                     self.INSET = ''.join(lineVals[1].split())
                 elif lineVals[0].upper() == "LOOPS":
                     self.loops = int(parVal[0])
+                elif '_ERR' in lineVals[0].upper():
+                    param_name = lineVals[0][1:].upper().replace('_ERR', '')
+                    try:
+                        self.parValsErr[param_name] = [float(Decimal(val)) for val in parVal]
+                    except Exception as e:
+                        logging.error(f"Error processing error values for {param_name}: {e}")
                 else:
                     if (len(parVal) > 0 and not self.strType(parVal[0]) == 'str' and
                             not self.strType(parVal[-1]) == 'str' and
@@ -1155,7 +1188,7 @@ class MainWindow(QtWidgets.QMainWindow):
                             for i in range(len(parVal)):
                                 parVal[i] = float(Decimal(parVal[i]))
                             self.parVals[str.upper(lineVals[0])] = parVal[:]
-
+        
     def openDef(self):
         """Opens data, gets parameter values, sets precision and sets scale
 
@@ -1172,7 +1205,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         global fit_par
         data = self.getData()
-        self.getParameter(data)
+        #self.getParameter(data)
         try:
             self.getParameter(data)
         except:
@@ -1231,9 +1264,7 @@ class MainWindow(QtWidgets.QMainWindow):
                             for j in range(int(diff)):
                                 self.parVals[key].append(val[-1])
 
-                    self.historyList.clear()
-                    self.historyList[key] = [self.parVals[key][:]]
-
+                   
                     min_max_diff = max(self.parVals[key]) - min(self.parVals[key])
                     percentage_of_min_max_diff = 0.1 * min_max_diff
                     lower_bound = min(self.parVals[key]) - percentage_of_min_max_diff
@@ -1245,25 +1276,33 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.yScale[key] = [lower_bound, upper_bound]
                     
                     unit = fit_par[key] if key in fit_par.keys() else ""
-                    self.gwObjects.append(GraphWidget(self.xScale,
-                                                      self.yScale[key][:],
-                                                      unit, key,
-                                                      self.parVals[key][:],
-                                                      self.parVals['RADI'][:],
-                                                      self.historyList[key][:],
-                                                      self.key, self.numPrecisionX,
-                                                      self.numPrecisionY[key]))
-                    self.gwObjects[-1].btnAddParam.clicked.connect(
-                        self.gwObjects[-1].changeGlobal)
-                    self.gwObjects[-1].btnAddParam.clicked.connect(
-                        self.insert_parameter_dialog)
-                    self.gwObjects[-1].btnEditParam.clicked.connect(
-                        self.gwObjects[-1].changeGlobal)
-                    self.gwObjects[-1].btnEditParam.clicked.connect(
-                        self.editParaObj)
-                    # TODO we should also probably set the minimum size for the scroll layout
-                    self.gwObjects[-1].setMinimumSize(int(self.scrollWidth/2), int(self.scrollHeight/2))
+                    # Do we really need to create all graph widgets here?
                     if key in self.par:
+                        self.gwObjects.append(GraphWidget(self.xScale,
+                                                        self.yScale[key][:],
+                                                        unit, key,
+                                                        self.parVals[key][:],
+                                                        self.parValsErr[key][:],
+                                                        self.parVals['RADI'][:],                                                       
+                                                        self.key, self.numPrecisionX,
+                                                        self.numPrecisionY[key],
+                                                        self.initial_width,
+                                                        self.initial_height))
+                        #self.gwObjects[-1].btnAddParam.clicked.connect(
+                        #    self.gwObjects[-1].changeGlobal)
+                        #self.gwObjects[-1].btnAddParam.clicked.connect(
+                        #    self.insert_parameter_dialog)
+                        self.gwObjects[-1].btnEditParam.clicked.connect(
+                            self.gwObjects[-1].changeGlobal)
+                        self.gwObjects[-1].btnEditParam.clicked.connect(
+                            self.editParaObj)
+                        self.gwObjects[-1].btnCloseParam.clicked.connect(
+                            self.gwObjects[-1].changeGlobal)
+                        self.gwObjects[-1].btnCloseParam.clicked.connect(
+                            self.closeParaObj)
+                        # TODO we should also probably set the minimum size for the scroll layout
+                        self.gwObjects[-1].setMinimumSize(int(self.scrollWidth/2), int(self.scrollHeight/2))
+                        
                         g_w_to_plot[key] = self.gwObjects[-1]
 
                 # retrieve the values in order and build a list of ordered key-value pairs
@@ -1303,7 +1342,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     for i in range(item_count):
                         widget_to_remove = self.scroll_grid_layout.itemAt(0).widget()
                         self.scroll_grid_layout.removeWidget(widget_to_remove)
-                        widget_to_remove.close()
+                        #widget_to_remove.close()
 
                     # get only the plot widgets for the we want to plot: defined in par
                     g_w_to_plot = [gwObject for gwObject in self.gwObjects
@@ -1682,21 +1721,27 @@ class MainWindow(QtWidgets.QMainWindow):
                                                   unitMeas,
                                                   tilted_ring_par,
                                                   self.parVals[tilted_ring_par],
+                                                  self.parValsErr[tilted_ring_par],
                                                   self.parVals['RADI'],
-                                                  self.historyList[tilted_ring_par],
                                                   "Yes",
                                                   self.numPrecisionX,
-                                                  1))
+                                                  1,
+                                                  self.initial_width,
+                                                  self.initial_height))
                 self.gwObjects[parIndex].setMinimumSize(self.scrollWidth/2,
                                                         self.scrollHeight/2)
-                self.gwObjects[parIndex].btnAddParam.clicked.connect(
-                    self.gwObjects[parIndex].changeGlobal)
-                self.gwObjects[parIndex].btnAddParam.clicked.connect(
-                    self.insert_parameter_dialog)
+                #self.gwObjects[parIndex].btnAddParam.clicked.connect(
+                #    self.gwObjects[parIndex].changeGlobal)
+                #self.gwObjects[parIndex].btnAddParam.clicked.connect(
+                #    self.insert_parameter_dialog)
                 self.gwObjects[parIndex].btnEditParam.clicked.connect(
                     self.gwObjects[parIndex].changeGlobal)
                 self.gwObjects[parIndex].btnEditParam.clicked.connect(
                     self.editParaObj)
+                self.gwObjects[parIndex].btnCloseParam.clicked.connect(
+                        self.gwObjects[parIndex].changeGlobal)
+                self.gwObjects[parIndex].btnCloseParam.clicked.connect(
+                    self.closeParaObj)
                 del list_of_t_r_p
 
             self.nrows = self.scroll_grid_layout.rowCount()
@@ -1725,7 +1770,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 for i in range(item_count):
                     widget_to_remove = self.scroll_grid_layout.itemAt(0).widget()
                     self.scroll_grid_layout.removeWidget(widget_to_remove)
-                    widget_to_remove.close()
+                    #widget_to_remove.close()
 
                 # get only the plot widgets for the we want to plot: defined in par
                     g_w_to_plot = [gwObject for gwObject in self.gwObjects
@@ -1757,8 +1802,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def editParamDef(self):
         global currPar, fit_par
+        print(f'Current parameter to edit: {currPar} and the fitpar {fit_par}')
         parIndex = self.par.index(currPar)
+        print(f'Displayed variables {self.par}')
+        print(f'Parameter index to edit: {parIndex}')
         user_input = self.ps.parameter.currentText()
+        print(f'The initial user input  {user_input}')
         if (user_input and
             not str.upper(str(user_input)) in self.par):
             try:
@@ -1769,7 +1818,10 @@ class MainWindow(QtWidgets.QMainWindow):
                                                   "view it.")
             else:
                 user_input = str.upper(str(user_input))
+                print(f"Editing parameter {self.par[parIndex]} to {user_input}")
                 self.par[parIndex] = user_input
+               
+                print(self.par[parIndex])
                 unitMeas = str(self.ps.unitMeasurement.text())
                 if user_input not in fit_par.keys():
                     fit_par[user_input] = unitMeas
@@ -1777,20 +1829,116 @@ class MainWindow(QtWidgets.QMainWindow):
                         if graph_widget.par == user_input:
                             graph_widget.unitMeas = unitMeas
                             break
+                # As we no longer create all graph widgets at once, we need to check if
+                # the graph widget for the edited parameter exists. If it doesn't, create it.
+                list_of_t_r_p = [gwObject.par for gwObject in self.gwObjects]
+                if user_input not in list_of_t_r_p:
+                    new_gwObject = (
+                        GraphWidget(self.xScale,
+                                    self.yScale[user_input],
+                                    unitMeas,
+                                    user_input,
+                                    self.parVals[user_input],
+                                    self.parValsErr[user_input],
+                                    self.parVals['RADI'],
+                                    "Yes",
+                                    self.numPrecisionX,
+                                    1,
+                                    self.initial_width,
+                                    self.initial_height))
+                    new_gwObject.setMinimumSize(int(self.scrollWidth/2),
+                        int(self.scrollHeight/2))
+                    #self.gwObjects[parIndex].btnAddParam.clicked.connect(
+                    #    self.gwObjects[parIndex].changeGlobal)
+                    #self.gwObjects[parIndex].btnAddParam.clicked.connect(
+                    #    self.insert_parameter_dialog)
+                    new_gwObject.btnEditParam.clicked.connect(
+                        new_gwObject.changeGlobal)
+                    new_gwObject.btnEditParam.clicked.connect(
+                        self.editParaObj)
+                    new_gwObject.btnCloseParam.clicked.connect(
+                        new_gwObject.changeGlobal)
+                    new_gwObject.btnCloseParam.clicked.connect(
+                        self.closeParaObj)
+                    self.gwObjects.append(new_gwObject)
+                    del list_of_t_r_p      
+                      
+                # Find the actual widget object for the current parameter in the layout
+                old_widget = None
+                for i in range(self.scroll_grid_layout.count()):
+                    w = self.scroll_grid_layout.itemAt(i).widget()
+                    if w and getattr(w, 'par', None) == currPar:
+                        old_widget = w
+                        break
 
-                g_w_to_plot = [gwObject for gwObject in self.gwObjects
-                               if gwObject.par == user_input]
-                curr_par_position_on_layout = (
-                    self.scroll_grid_layout.getItemPosition(parIndex))
-                row_number = curr_par_position_on_layout[0]
-                column_number = curr_par_position_on_layout[1]
-                widget_to_remove = self.scroll_grid_layout.itemAt(parIndex).widget()
-                self.scroll_grid_layout.removeWidget(widget_to_remove)
-                widget_to_remove.close() # will this make me lose values of tilted-ring parameters?
-                self.scroll_grid_layout.addWidget(g_w_to_plot[0], row_number,
-                                                  column_number)
+                if old_widget is None:
+                    print("Could not find existing widget for currPar; aborting edit swap")
+                    return
+
+                # Determine the position of the old widget in the grid
+                idx_in_layout = self.scroll_grid_layout.indexOf(old_widget)
+                row_number, column_number, _rowSpan, _colSpan = self.scroll_grid_layout.getItemPosition(idx_in_layout)
+
+                # Determine index in gwObjects for the current parameter
+                gw_index = None
+                for i, gw in enumerate(self.gwObjects):
+                    if getattr(gw, 'par', None) == currPar:
+                        gw_index = i
+                        break
+
+                if gw_index is None:
+                    print("Could not find gwObjects entry for currPar; aborting edit swap")
+                    return
+
+                # Ensure we have a GraphWidget for the new parameter
+                existing_new = None
+                for gw in self.gwObjects:
+                    if getattr(gw, 'par', None) == user_input:
+                        existing_new = gw
+                        break
+
+                if existing_new is None:
+                    # Create a new GraphWidget for the edited parameter
+                    new_widget = (
+                        GraphWidget(self.xScale,
+                                    self.yScale[user_input],
+                                    unitMeas,
+                                    user_input,
+                                    self.parVals[user_input],
+                                    self.parValsErr[user_input],
+                                    self.parVals['RADI'],
+                                    "Yes",
+                                    self.numPrecisionX,
+                                    1,
+                                    self.initial_width,
+                                    self.initial_height))
+                    new_widget.setMinimumSize(int(self.scrollWidth/2), int(self.scrollHeight/2))
+                    new_widget.btnEditParam.clicked.connect(new_widget.changeGlobal)
+                    new_widget.btnEditParam.clicked.connect(self.editParaObj)
+                    new_widget.btnCloseParam.clicked.connect(new_widget.changeGlobal)
+                    new_widget.btnCloseParam.clicked.connect(self.closeParaObj)
+                else:
+                    new_widget = existing_new
+
+                # Remove old widget from layout and replace gwObjects entry
+                print(f"Removing widget for parameter {old_widget.par}")
+                self.scroll_grid_layout.removeWidget(old_widget)
+                old_widget.hide()
+
+                self.gwObjects[gw_index] = new_widget
+
+                # Add new widget at the same position
+                print(f"Adding widget for parameter {new_widget.par}")
+                print(f"At row {row_number} and column {column_number}")
+                self.scroll_grid_layout.addWidget(new_widget, row_number, column_number)
+                new_widget.show()
+                
+                # Update current parameter to the new one
+                currPar = user_input
+                #currPar = user_input
                 # TODO 03/07/19 (sam): will be nice to add a little close icon on each graph widget
                 # and then implement removeWidget and close functions when it's clicked 
+                print(self.ps)
                 self.ps.close()
     
     def create_parameter_dialog(self, opt, title):
@@ -1830,6 +1978,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ps.btnOK.clicked.connect(self.editParamDef)
         self.ps.btnCancel.clicked.connect(self.ps.close)
 
+    def closeParaObj(self):
+        #updated in changeGlobal
+        global currPar
+        print(f'Removing the Graph of parameter {currPar}')
+        
+        parIndex = [self.scroll_grid_layout.itemAt(i).widget().par 
+            for i in range(self.scroll_grid_layout.count())].index(currPar)
+        print(f'Graph widget index to remove: {parIndex}')
+        for i in range(self.scroll_grid_layout.count()):
+            print(f"Widget at position {i} is "
+                  f"{self.scroll_grid_layout.itemAt(i).widget().par}")
+        widget_to_remove = self.scroll_grid_layout.itemAt(parIndex).widget()
+        print(f"Removing widget for parameter {widget_to_remove.par}")
+        self.scroll_grid_layout.removeWidget(widget_to_remove)
+        self.par.remove(currPar)
+       
     def tirificMessage(self):
         """Displays the information about input data cube not available
 
@@ -1851,7 +2015,7 @@ class MainWindow(QtWidgets.QMainWindow):
         progress = QtWidgets.QProgressDialog("Operation in progress...",
                                              "Cancel", 0, 100)
         progress.setWindowModality(QtCore.Qt.WindowModal)
-        progress.setMaximum(self.loops*1e6)
+        progress.setMaximum(int(self.loops*1e6))
         progress.resize(500, 100)
         prev = 1
         message = "Stopped"
