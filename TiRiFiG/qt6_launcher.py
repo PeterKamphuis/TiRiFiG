@@ -261,6 +261,111 @@ from matplotlib import style
 style.use("seaborn-v0_8")
 from PyQt6 import QtCore, QtWidgets,QtGui
 
+# --- Modern theme (QSS) -------------------------------------------------------
+def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str | None = None) -> None:
+    """Apply a sleek, modern style across the app. Optional background image.
+
+    Args:
+        app: QApplication instance
+        background_image_path: Optional path to a background image for central areas
+    """
+    QtWidgets.QApplication.setStyle("Fusion")
+
+    print(background_image_path)
+    # Dark palette baseline
+    palette = QtGui.QPalette()
+    base = QtGui.QColor(37, 37, 38)
+    panel = QtGui.QColor(45, 45, 48)
+    text = QtGui.QColor(220, 220, 220)
+    highlight = QtGui.QColor(14, 122, 254)
+    disabled = QtGui.QColor(127, 127, 127)
+
+    palette.setColor(QtGui.QPalette.ColorRole.Window, panel)
+    palette.setColor(QtGui.QPalette.ColorRole.WindowText, text)
+    palette.setColor(QtGui.QPalette.ColorRole.Base, base)
+    palette.setColor(QtGui.QPalette.ColorRole.AlternateBase, panel)
+    palette.setColor(QtGui.QPalette.ColorRole.ToolTipBase, panel)
+    palette.setColor(QtGui.QPalette.ColorRole.ToolTipText, text)
+    palette.setColor(QtGui.QPalette.ColorRole.Text, text)
+    palette.setColor(QtGui.QPalette.ColorRole.Button, panel)
+    palette.setColor(QtGui.QPalette.ColorRole.ButtonText, text)
+    palette.setColor(QtGui.QPalette.ColorRole.Highlight, highlight)
+    palette.setColor(QtGui.QPalette.ColorRole.HighlightedText, QtGui.QColor(255, 255, 255))
+    # Disabled
+    palette.setColor(QtGui.QPalette.ColorGroup.Disabled, QtGui.QPalette.ColorRole.Text, disabled)
+    palette.setColor(QtGui.QPalette.ColorGroup.Disabled, QtGui.QPalette.ColorRole.ButtonText, disabled)
+    app.setPalette(palette)
+
+    # Core QSS
+    bg_image_rule = (
+        f"border-image: url('{background_image_path}') 0 0 0 0 stretch stretch;"
+        #"background-position: center; background-repeat: no-repeat;"
+        #"background-size: cover;"
+        if background_image_path else ""
+    )
+
+    qss = f"""
+    QMainWindow {{
+        background-color: {panel.name()};
+        color: {text.name()};
+    }}
+    QWidget {{
+        background-color: {panel.name()};
+        color: {text.name()};
+    }}
+    #centralWidget {{ 
+        {bg_image_rule}
+        background-color: {panel.name()};
+    }}
+
+    QMenuBar {{ background-color: {panel.name()}; border: none; }}
+    QMenuBar::item {{ padding: 6px 10px; background: transparent; }}
+    QMenuBar::item:selected {{ background: rgba(255,255,255,0.06); border-radius: 4px; }}
+
+    QMenu {{ background-color: {panel.name()}; border: 1px solid rgba(255,255,255,0.08); }}
+    QMenu::item {{ padding: 6px 12px; }}
+    QMenu::item:selected {{ background: rgba(255,255,255,0.08); }}
+
+    QScrollArea {{ border: none; background: transparent; }}
+    QScrollArea > QWidget > QWidget {{ background: transparent; }}
+    QScrollBar:vertical {{ background: transparent; width: 10px; }}
+    QScrollBar::handle:vertical {{ background: rgba(255,255,255,0.18); border-radius: 5px; min-height: 40px; }}
+    QScrollBar::handle:vertical:hover {{ background: rgba(255,255,255,0.28); }}
+    QScrollBar:horizontal {{ background: transparent; height: 10px; }}
+    QScrollBar::handle:horizontal {{ background: rgba(255,255,255,0.18); border-radius: 5px; min-width: 40px; }}
+
+    QPushButton {{
+        background-color: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        padding: 6px 10px;
+    }}
+    QPushButton:hover {{ background-color: rgba(255,255,255,0.12); }}
+    QPushButton:pressed {{ background-color: rgba(255,255,255,0.18); }}
+    QPushButton:disabled {{ color: {disabled.name()}; border-color: rgba(255,255,255,0.04); }}
+
+    QLineEdit, QComboBox, QTextEdit {{
+        background-color: {base.name()};
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 8px;
+        padding: 6px 8px;
+        selection-background-color: {highlight.name()};
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: {panel.name()};
+        border: 1px solid rgba(255,255,255,0.08);
+        selection-background-color: rgba(255,255,255,0.10);
+    }}
+
+    QToolTip {{
+        background-color: {panel.name()};
+        color: {text.name()};
+        border: 1px solid rgba(255,255,255,0.12);
+        padding: 6px 8px;
+    }}
+    """
+    app.setStyleSheet(qss)
+
 try:
     from importlib.resources import files as import_pack_files
 except ImportError:
@@ -353,8 +458,11 @@ class GraphWidget(QtWidgets.QWidget):
         self.setLayout(grid)
         # Canvas and Toolbar
         self.figure = plt.figure()
+        self.figure.patch.set_facecolor('none')
+        self.figure.patch.set_alpha(0.0)
 
         self.canvas = FigureCanvas(self.figure)
+        self.canvas.setStyleSheet("background: transparent;")
         # self.canvas.setFocusPolicy( QtCore.Qt.ClickFocus )
         # self.canvas.setFocusPolicy( QtCore.Qt.WheelFocus )
         self.canvas.setFocus()
@@ -364,8 +472,10 @@ class GraphWidget(QtWidgets.QWidget):
         self.canvas.mpl_connect('button_release_event', self.getRelease)
         self.canvas.mpl_connect('motion_notify_event', self.getMotion)
         # self.canvas.mpl_connect('key_press_event', self.keyPressed)
-
+        self.figure.subplots_adjust(left=0.1, right=1.0, top=1.0, bottom=0.15)
         self.ax = self.figure.add_subplot(111)
+        self.ax.patch.set_facecolor('none')
+        self.ax.patch.set_alpha(0.0)
 
         # button to add another tilted-ring parameter to plot
         #self.btnAddParam = QtWidgets.QPushButton('&Add',self)
@@ -379,12 +489,14 @@ class GraphWidget(QtWidgets.QWidget):
         self.btnEditParam = QtWidgets.QPushButton('',self)
         self.btnEditParam.setFixedSize(47,40)
         self.btnEditParam.setFlat(True)
+        self.btnEditParam.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         self.btnEditParam.setIcon(QtGui.QIcon(QtGui.QPixmap(str(icons_location/'edit.png'))))
         self.btnEditParam.setIconSize(QtCore.QSize(47,40))
         
         self.btnFitPoly = QtWidgets.QPushButton('',self)
         self.btnFitPoly.setFixedSize(47,40)
         self.btnFitPoly.setFlat(True)
+        self.btnFitPoly.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         self.btnFitPoly.setIcon(QtGui.QIcon(QtGui.QPixmap(str(icons_location/'fitpoly.png'))))    
         self.btnFitPoly.setIconSize(QtCore.QSize(47,40))
         self.btnFitPoly.clicked.connect(self.changeGlobal)
@@ -396,12 +508,28 @@ class GraphWidget(QtWidgets.QWidget):
         self.btnCloseParam.setFixedSize(40, 40)
         self.btnCloseParam.setIcon(QtGui.QIcon(QtGui.QPixmap(str(icons_location/'close.png'))))
         self.btnCloseParam.setFlat(True)
+        self.btnCloseParam.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         self.btnCloseParam.setIconSize(QtCore.QSize(40,40))
         # FIX ME: use icon instead of text
         # self.btnEditParam.setIcon(QtGui.QIcon('utilities/icons/edit.png'))
         self.btnEditParam.setToolTip('Modify plotted parameter')
         self.btnFitPoly.setToolTip('Fit polynomial to data')
         self.btnCloseParam.setToolTip('Close Window')
+
+        # Rounded, icon-like buttons
+        ctrl_qss = """
+        QPushButton {
+            background-color: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 16px;
+            padding: 6px 10px;
+        }
+        QPushButton:hover { background-color: rgba(255,255,255,0.14); }
+        QPushButton:pressed { background-color: rgba(255,255,255,0.22); }
+        """
+        self.btnEditParam.setStyleSheet(ctrl_qss)
+        self.btnFitPoly.setStyleSheet(ctrl_qss)
+        self.btnCloseParam.setStyleSheet(ctrl_qss)
         hbox = QtWidgets.QHBoxLayout()
         hbox_right = QtWidgets.QHBoxLayout()
         #hbox.addWidget(self.btnAddParam)
@@ -1089,6 +1217,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle('TiRiFiG')
         # define a widget sitting in the main window where all other widgets will live
         central_widget = QtWidgets.QWidget()
+        central_widget.setObjectName("centralWidget")
         self.setCentralWidget(central_widget)
         # make this new widget have a vertical layout
         vertical_layout = QtWidgets.QVBoxLayout()
@@ -1103,9 +1232,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # scroll area
         scroll_area = QtWidgets.QScrollArea()
         scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll_area.viewport().setAutoFillBackground(False)
         # the scroll area needs a widget to be placed inside of it which will hold the content
         # create one and let it have a grid layout
         self.scroll_area_content = QtWidgets.QWidget()
+        self.scroll_area_content.setAutoFillBackground(False)
         self.scroll_grid_layout = QtWidgets.QGridLayout()
         self.scroll_area_content.setLayout(self.scroll_grid_layout)
         scroll_area.setWidget(self.scroll_area_content)
@@ -2248,6 +2380,13 @@ def main():
         os.remove(os.getcwd() + "/tmpDeffile.def")
 
     app = QtWidgets.QApplication(sys.argv)
+    # Apply modern style (set a background image path if desired)
+    background_image_path =  str(import_pack_files('TiRiFiG.utilities.background')/'Background.png')  # e.g., "path/to/your/image.png"
+    try:
+        apply_modern_style(app,background_image_path=background_image_path)
+    except Exception as _e:
+        # Non-fatal if styling fails
+        pass
     GUI = MainWindow()
     GUI.show()
     sys.exit(app.exec())
