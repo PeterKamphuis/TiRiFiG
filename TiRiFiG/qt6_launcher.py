@@ -299,11 +299,14 @@ def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str |
     # Core QSS
     bg_image_rule = (
         f"border-image: url('{background_image_path}') 0 0 0 0 stretch stretch;"
-        #"background-position: center; background-repeat: no-repeat;"
-        #"background-size: cover;"
         if background_image_path else ""
     )
-
+    popup_image_rule = (
+        f"background-image: url('{background_image_path}');"
+        f"background-position: center;"
+        f"background-attachment: fixed;"
+        if background_image_path else "background-image: none;"
+    )
     qss = f"""
     QMainWindow {{
         background-color: {panel.name()};
@@ -316,6 +319,24 @@ def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str |
     #centralWidget {{ 
         {bg_image_rule}
         background-color: {panel.name()};
+    }}
+
+    /* Apply background image to dialogs/popups as well */
+    QDialog, QMessageBox, QProgressDialog {{
+        {popup_image_rule}
+        background-color: {panel.name()};
+        color: {text.name()};
+    }}
+
+    /* Custom popup widgets tagged with popupBg=true */
+    QWidget[popupBg="true"] {{
+        {popup_image_rule}
+        background-color: {panel.name()};
+        color: {panel.name()};
+    }}
+    QLabel{{
+        background-color: transparent;
+        color: {panel.name()};
     }}
 
     QMenuBar {{ background-color: {panel.name()}; border: none; }}
@@ -339,16 +360,18 @@ def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str |
         border: 1px solid rgba(255,255,255,0.08);
         border-radius: 8px;
         padding: 6px 10px;
+        color: {panel.name()};
     }}
     QPushButton:hover {{ background-color: rgba(255,255,255,0.12); }}
     QPushButton:pressed {{ background-color: rgba(255,255,255,0.18); }}
     QPushButton:disabled {{ color: {disabled.name()}; border-color: rgba(255,255,255,0.04); }}
 
     QLineEdit, QComboBox, QTextEdit {{
-        background-color: {base.name()};
+        background-color: {text.name()};
         border: 1px solid rgba(255,255,255,0.10);
         border-radius: 8px;
         padding: 6px 8px;
+        color: {panel.name()};
         selection-background-color: {highlight.name()};
     }}
     QComboBox QAbstractItemView {{
@@ -435,6 +458,10 @@ class GraphWidget(QtWidgets.QWidget):
     mDblPress = [None, None]
     last_value = 0
     is_dragging = False
+    drag_index = None
+    _fit_thread = None
+    _fit_worker = None
+    _progress = None
 
     def __init__(self, xScale, yScale, unitMeas, par, parVals,parValsErr, parValRADI,
             key, numPrecisionX, numPrecisionY,initial_width,initial_height):
@@ -472,10 +499,19 @@ class GraphWidget(QtWidgets.QWidget):
         self.canvas.mpl_connect('button_release_event', self.getRelease)
         self.canvas.mpl_connect('motion_notify_event', self.getMotion)
         # self.canvas.mpl_connect('key_press_event', self.keyPressed)
-        self.figure.subplots_adjust(left=0.1, right=1.0, top=1.0, bottom=0.15)
+        self.figure.subplots_adjust(left=0.15, right=1.0, top=1.0, bottom=0.15)
         self.ax = self.figure.add_subplot(111)
         self.ax.patch.set_facecolor('none')
         self.ax.patch.set_alpha(0.0)
+
+        # Persistent artists for fast updates
+        self.line_current = None
+        self.line_original = None
+        self.err_container = None
+        self.background = None  # For blitting
+
+        # Setup blitting: cache background when figure is drawn
+        self.canvas.mpl_connect('draw_event', self.on_draw)
 
         # button to add another tilted-ring parameter to plot
         #self.btnAddParam = QtWidgets.QPushButton('&Add',self)
@@ -564,19 +600,18 @@ class GraphWidget(QtWidgets.QWidget):
         if key not in ['VROT']:
             if self.inp.innerFlatrings.text() != '':
                 inner_flatrings = int(self.inp.innerFlatrings.text())
-       
+        
         Configuration = {'DEBUG': True,
                          'DEBUG_FUNCTION':'ALL',
-                     'VERBOSE_LOG': False,
-                     'VERBOSE_SCREEN': False,  
-                    'OUTPUTLOG': None,
-                    'TIMING': False,
-                    'NO_RINGS': len(values),
-                    'LAST_RELIABLE_RINGS': [len(values),len(values)],
-                       
-                       }
+                         'VERBOSE_LOG': False,
+                         'VERBOSE_SCREEN': False,
+                         'OUTPUTLOG': None,
+                         'TIMING': False,
+                         'NO_RINGS': len(values),
+                         'LAST_RELIABLE_RINGS': [len(values),len(values)],
+                        }
         Tirific_Template = {f'{self.par}': values,}
-      
+
         if key in ['INCL','PA']:
             if self.inp.warped.isChecked():
                 #We have to fit the angular momentum function
@@ -584,23 +619,99 @@ class GraphWidget(QtWidgets.QWidget):
                 return
         self.inp.close()
         zero_point = None
-        if key in ['VROT']:      
+        if key in ['VROT']:
             zero_point = values[0]
             Configuration['CHANNEL_WIDTH'] = min(errors)
             Configuration['RC_UNRELIABLE'] = len(values)
-            if self.inp.flatOuterRings.text() != '':
+            if hasattr(self.inp, 'flatOuterRings') and self.inp.flatOuterRings.text() != '':
                 Configuration['RC_UNRELIABLE'] = len(values)-int(self.inp.flatOuterRings.text())
             print(Configuration['RC_UNRELIABLE'])
-        from pyFAT_astro.Support.modify_template import fit_polynomial
-        fitted_values, final_poly = fit_polynomial(Configuration,radii,
-            values,errors,key,Tirific_Template,inner_fix=inner_flatrings,
-            zero_point=zero_point, boundary_limits=limits,
-            allowed_order=[mindegree,maxdegree],return_order=True)
-        print(f'We fitted {self.par} with polynomial order {final_poly}')
-        print(f'We got these values {fitted_values}')
-        self.parVals = fitted_values
-        self.key = "Yes"
-        self.plotFunc()
+
+        # Show a modal busy dialog
+        self._progress = QtWidgets.QProgressDialog("Fitting polynomial…", None, 0, 0, self)
+        self._progress.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+        self._progress.setAutoClose(False)
+        self._progress.setAutoReset(False)
+        self._progress.setCancelButton(None)
+        self._progress.setMinimumDuration(0)
+        self._progress.show()
+
+        # Start worker thread to keep UI responsive
+        self._fit_thread = QtCore.QThread(self)
+
+        class FitWorker(QtCore.QObject):
+            finished = QtCore.pyqtSignal(object, object)
+            errored = QtCore.pyqtSignal(str)
+
+            def __init__(self, Configuration, radii, values, errors, key, par, Tirific_Template, inner_fix, zero_point, limits, allowed_order):
+                super().__init__()
+                self.Configuration = Configuration
+                self.radii = radii
+                self.values = values
+                self.errors = errors
+                self.key = key
+                self.par = par
+                self.Tirific_Template = Tirific_Template
+                self.inner_fix = inner_fix
+                self.zero_point = zero_point
+                self.limits = limits
+                self.allowed_order = allowed_order
+
+            @QtCore.pyqtSlot()
+            def run(self):
+                try:
+                    from pyFAT_astro.Support.modify_template import fit_polynomial
+                    fitted_values, final_poly = fit_polynomial(
+                        self.Configuration,
+                        self.radii,
+                        self.values,
+                        self.errors,
+                        self.key,
+                        self.Tirific_Template,
+                        inner_fix=self.inner_fix,
+                        zero_point=self.zero_point,
+                        boundary_limits=self.limits,
+                        allowed_order=self.allowed_order,
+                        return_order=True,
+                    )
+                    self.finished.emit(fitted_values, final_poly)
+                except Exception as e:
+                    self.errored.emit(str(e))
+
+        self._fit_worker = FitWorker(Configuration, radii, values, errors, key, self.par, Tirific_Template, inner_flatrings, zero_point, limits, [mindegree, maxdegree])
+        self._fit_worker.moveToThread(self._fit_thread)
+        self._fit_thread.started.connect(self._fit_worker.run)
+
+        def _done(fitted_values, final_poly):
+            try:
+                print(f'We fitted {self.par} with polynomial order {final_poly}')
+                print(f'We got these values {fitted_values}')
+                self.parVals = fitted_values
+                self.key = "Yes"
+                self.plotFunc()
+            finally:
+                if self._progress is not None:
+                    self._progress.reset()
+                    self._progress.hide()
+                    self._progress = None
+
+        def _error(msg: str):
+            try:
+                QtWidgets.QMessageBox.critical(self, "Fit Error", msg)
+            finally:
+                if self._progress is not None:
+                    self._progress.reset()
+                    self._progress.hide()
+                    self._progress = None
+
+        self._fit_worker.finished.connect(_done)
+        self._fit_worker.errored.connect(_error)
+        self._fit_worker.finished.connect(self._fit_thread.quit)
+        self._fit_worker.errored.connect(self._fit_thread.quit)
+        self._fit_thread.finished.connect(self._fit_worker.deleteLater)
+        self._fit_thread.finished.connect(self._fit_thread.deleteLater)
+
+        self._fit_thread.start()
         return
       
     def create_polyfit_dialog(self):
@@ -609,6 +720,33 @@ class GraphWidget(QtWidgets.QWidget):
         self.inp.btnOK.clicked.connect(self.fitPolynomial)
         self.inp.btnCancel.clicked.connect(self.inp.close)
         return
+
+    def on_draw(self, event):
+        """Cache a clean background and re-blit the animated line.
+
+        Ensures `line_current` isn't baked into the cached background after any
+        full draw (e.g., initial show/resize or axis changes), keeping blit
+        updates correct and visible.
+        """
+        if self.ax is None or self.canvas is None:
+            return
+
+        # Temporarily hide the current line to capture a clean background
+        if self.line_current is not None:
+            was_visible = self.line_current.get_visible()
+            self.line_current.set_visible(False)
+            self.background = self.canvas.copy_from_bbox(self.ax.bbox)
+            # Restore visibility
+            self.line_current.set_visible(was_visible)
+
+            # Immediately re-blit the current line so it appears after full draws
+            self.ax.draw_artist(self.line_current)
+            self.canvas.blit(self.ax.bbox)
+        else:
+            # No animated line yet; just cache the background
+            self.background = self.canvas.copy_from_bbox(self.ax.bbox)
+      
+        #self.background = self.canvas.copy_from_bbox(self.ax.bbox)
 
     def changeGlobal(self, val=None):
         global currPar
@@ -658,6 +796,17 @@ class GraphWidget(QtWidgets.QWidget):
             self.mRelease[0] = None
             self.mRelease[1] = None
             self.is_dragging = True
+            # identify closest point to drag
+            try:
+                distances = [abs(event.xdata - x) for x in self.parValRADI]
+                j = int(np.argmin(distances))
+                # require it to be within a small x-threshold (similar to previous logic)
+                if abs(event.xdata - self.parValRADI[j]) <= 3:
+                    self.drag_index = j
+                else:
+                    self.drag_index = None
+            except Exception:
+                self.drag_index = None
 
         if event.dblclick and not event.xdata is None:
             self.mDblPress[0] = event.xdata
@@ -744,6 +893,7 @@ class GraphWidget(QtWidgets.QWidget):
         self.mPress[0] = None
         self.mPress[1] = None
         self.is_dragging = False
+        self.drag_index = None
 
     def getMotion(self, event):
         """Mouse is in motion
@@ -854,14 +1004,33 @@ class GraphWidget(QtWidgets.QWidget):
         self.ax.set_ylim(self.yScale[0], self.yScale[1])
         self.ax.set_xlabel("RADI (arcsec)")
         self.ax.set_ylabel(self.par + "( "+self.unitMeas+ " )")
-        self.ax.plot(self.parValRADI, self.parVals, '--bo',zorder=4)
-        self.ax.plot(self.parValRADI, self.originalparVals, '--ro',alpha=0.2,zorder=2)
+
+        # Create persistent artists once, then update data
        
-        self.ax.errorbar(self.parValRADI,self.originalparVals,yerr= self.parValsErr, 
-                         c ='r',linestyle='-', alpha=0.2, zorder=2)
-      
+        (self.line_current,) = self.ax.plot(self.parValRADI, self.parVals, '--bo', zorder=4,animated=True)
+   
+       
+        self.ax.plot(self.parValRADI, self.originalparVals, '--ro', alpha=0.2, zorder=2)
+        self.ax.errorbar(
+                self.parValRADI,
+                self.originalparVals,
+                yerr=self.parValsErr,
+                c='r', linestyle='-', alpha=0.2, zorder=2
+            )
+
         self.ax.set_xticks(self.parValRADI)
+        # Hide the animated line before the full draw to keep background clean
+        if self.line_current is not None:
+            self.line_current.set_visible(False)
+        # Full draw for non-animated artists (axes, error bars, originals)
         self.canvas.draw()
+        # Cache clean background and then re-blit the current line
+        self.background = self.canvas.copy_from_bbox(self.ax.bbox)
+        #if self.line_current is not None:
+        self.line_current.set_visible(True)
+        self.ax.draw_artist(self.line_current)
+        self.canvas.blit(self.ax.bbox)
+        self.canvas.flush_events()
         self.key = "No"
 
     def plotFunc(self):
@@ -884,52 +1053,39 @@ class GraphWidget(QtWidgets.QWidget):
         # this re-plots the graph as long as the mouse is in motion and the right data
         # point is clicked
         else:
-            for j in range(len(self.parValRADI)):
-               
-                if ((self.mPress[0] < (self.parValRADI[j]) + 3) and
-                    (self.mPress[0] > (self.parValRADI[j]) - 3) and
-                    (self.mRelease[0] is None)):
-                    dy = self.mMotion[0] - self.parVals[j]
-                    self.parVals[j]+=dy
+            # Fast path: update only the dragged point and line data
+            if self.is_dragging and self.drag_index is not None and self.mMotion[0] is not None:
+                j = self.drag_index
+                # set the y-value directly to current mouse y
+                new_y = self.mMotion[0]
+                if new_y is not None:
+                    self.parVals[j] = new_y
+
+                    # Update current line data only
+                    self.line_current.set_ydata(self.parVals)
+
+                    # Adjust limits only if new point is outside current view
                     bottom, top = self.ax.get_ylim()
-                    self.ax.clear()
-                    self.ax.set_xlim(self.xScale[0], self.xScale[1])
-                    max_yvalue = max(self.parVals)
-                    min_yvalue = min(self.parVals)
-
-                    # FIX ME (sam 28/05/2019): scaling points too close to the limit should be relooked
-                    # division by zero was encountered during runtime
-                    if ((self.mMotion[0]/min_yvalue) >= 0.95) or ((self.mMotion[0]/max_yvalue) >= 0.95):
-                        if self._almost_equal(self.mMotion[0], bottom, rel_tol=5e-2):
-                            bottom = min_yvalue - (0.05*(max_yvalue-min_yvalue))
-                            # this line is optional, only bottom scale should change
-                            top = max_yvalue + (0.05*(max_yvalue-min_yvalue))
-                        elif self._almost_equal(self.mMotion[0], top, rel_tol=5e-2):
-                            top = max_yvalue + (0.05*(max_yvalue-min_yvalue))
-                            # this line is optional, only top scale should change
-                            bottom = min_yvalue - (0.05*(max_yvalue-min_yvalue))
-                    else:
-                        if self._almost_equal(self.mMotion[0], min_yvalue):
-                            bottom = min_yvalue - (0.3*(max_yvalue-min_yvalue))
-                            # this line is optional, only bottom scale should change
-                            top = max_yvalue + (0.1*(max_yvalue-min_yvalue))
-                        elif self._almost_equal(self.mMotion[0], max_yvalue):
-                            top = max_yvalue + (0.3*(max_yvalue-min_yvalue))
-                            # this line is optional, only top scale should change
-                            bottom = min_yvalue - (0.1*(max_yvalue-min_yvalue))
-
-                    self.ax.set_ylim(bottom, top)
-                    self.ax.set_xlabel("RADI (arcsec)")
-                    self.ax.set_ylabel(self.par + "( "+self.unitMeas+ " )")
-                    self.ax.plot(self.parValRADI, self.parVals, '--bo')
-                    self.ax.plot(self.parValRADI, self.originalparVals, '--ro',alpha=0.2,zorder=2)
-       
-                    self.ax.errorbar(self.parValRADI,self.originalparVals,yerr= self.parValsErr, 
-                         c ='r',linestyle='-', alpha=0.2, zorder=2)
-                    self.ax.set_xticks(self.parValRADI)
-                    self.canvas.draw()
+                    if new_y < bottom or new_y > top:
+                        max_yvalue = float(np.max(self.parVals))
+                        min_yvalue = float(np.min(self.parVals))
+                        span = max(1e-9, (max_yvalue - min_yvalue))
+                        bottom = min_yvalue - 0.1 * span
+                        top = max_yvalue + 0.1 * span
+                        self.ax.set_ylim(bottom, top)
+                        self.background = None  # Invalidate cached background
+                        self.canvas.draw_idle()
+                    else:    
+                        # Blit-accelerated redraw (only changed region)
+                        if self.background is not None:
+                            self.canvas.restore_region(self.background) 
+                            self.ax.draw_artist(self.line_current)
+                            self.canvas.blit(self.ax.bbox)
+                            self.canvas.flush_events()
+                        else:
+                            self.canvas.draw_idle()
                     self.key = "No"
-                    break
+            # If not dragging, do nothing heavy here
 
 class SMWindow(QtWidgets.QWidget):
 
@@ -937,6 +1093,9 @@ class SMWindow(QtWidgets.QWidget):
         # TODO SAM (26/06/2019) no need to pass 'par' to init if we have 'gwObjects'
         # but maybe we need it because it makes things faster
         super(SMWindow, self).__init__()
+        self.setProperty("popupBg", True)
+        # Enable stylesheet background (needed for border-image on top-level QWidget)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self.xMinVal = xVal[0]
         self.xMaxVal = xVal[1]
         self.gwObjects = gwObjects
@@ -1046,16 +1205,21 @@ class PolyFitWindow(QtWidgets.QWidget):
     
     def __init__(self, par):
         super(PolyFitWindow, self).__init__()
+        self.setProperty("popupBg", True)
+        # Enable stylesheet background (needed for border-image on top-level QWidget)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self.par = par
         polys = [1,2,3,4,5,6,7,8]
         self.minDegreeLabel = QtWidgets.QLabel("Min Degree of Polynomial")
         self.minDegree = QtWidgets.QComboBox()
         for degree in polys:
             self.minDegree.addItem(str(degree))
+        self.minDegree.setStyleSheet("QComboBox { combobox-popup: 0; }")
         self.maxDegreeLabel = QtWidgets.QLabel("Max Degree of Polynomial")
         self.maxDegree = QtWidgets.QComboBox()
         for degree in polys[::-1]:
             self.maxDegree.addItem(str(degree))
+        self.maxDegree.setStyleSheet("QComboBox { combobox-popup: 0; }")
         self.lowerBoundaryLabel = QtWidgets.QLabel("Lower Boundary Limit")
         self.lowerBoundary = QtWidgets.QLineEdit()
         self.upperBoundaryLabel = QtWidgets.QLabel("Upper Boundary Limit")
@@ -1116,6 +1280,9 @@ class ParamSpec(QtWidgets.QWidget):
 
     def __init__(self, par, windowTitle,plotted_parameters = None, addLocation=False):
         super(ParamSpec, self).__init__()
+        self.setProperty("popupBg", True)
+        # Enable stylesheet background (needed for border-image on top-level QWidget)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self.par = par
 
         self.parameterLabel = QtWidgets.QLabel("Parameter")
