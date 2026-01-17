@@ -1371,8 +1371,10 @@ class MainWindow(QtWidgets.QMainWindow):
         super(MainWindow, self).__init__()
         self.initUI()
         monitors = QtWidgets.QApplication.primaryScreen().availableGeometry()
-        self.initial_width = monitors.width()*self.initial_size
-        self.initial_height = monitors.height()*self.initial_size
+        #self.initial_width = monitors.width()*self.initial_size
+        #self.initial_height = monitors.height()*self.initial_size
+        self.initial_height = 1024
+        self.initial_width = 1536
         self.resize(int(self.initial_width), 
             int(self.initial_height))
         _center(self)
@@ -1677,7 +1679,10 @@ class MainWindow(QtWidgets.QMainWindow):
                             for i in range(len(parVal)):
                                 parVal[i] = float(Decimal(parVal[i]))
                             self.parVals[str.upper(lineVals[0])] = parVal[:]
-        
+        for key in self.parVals:
+            if key not in self.parValsErr:
+                self.parValsErr[key] = [float('NaN')]*len(self.parVals[key])
+
     def openDef(self):
         """Opens data, gets parameter values, sets precision and sets scale
 
