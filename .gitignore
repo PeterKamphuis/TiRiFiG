@@ -13,7 +13,7 @@ dist
 .tox
 nosetests.xml
 .noseids
-
+.DS_Store
 # Developer tools
 .ropeproject
 .vscode/
