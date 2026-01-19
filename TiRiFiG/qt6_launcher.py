@@ -258,6 +258,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvas
 # from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 import matplotlib.pyplot as plt
 from matplotlib import style
+from matplotlib.widgets import RectangleSelector
 style.use("seaborn-v0_8")
 from PyQt6 import QtCore, QtWidgets,QtGui
 import pyFAT_astro.Support.support_functions as FAT_sup
@@ -397,6 +398,7 @@ def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str |
 
     QToolTip {{
         background: {text.name()};
+        background-color: {text.name()};
         color: {panel.name()};
         border: 3px solid rgba(255,255,255,0.12);
         padding: 2px 2px;
@@ -502,7 +504,7 @@ class GraphWidget(QtWidgets.QWidget):
         self.key = key
         self.numPrecisionX = numPrecisionX
         self.numPrecisionY = numPrecisionY
-        self.parameterFittingSetting = paramenterFittingSetting
+        self.parameterFitSetting = paramenterFittingSetting
         #self.setFixedSize(initial_width, initial_height)
         # Grid Layout
         grid = QtWidgets.QGridLayout()
@@ -559,9 +561,11 @@ class GraphWidget(QtWidgets.QWidget):
         self.btnFitPoly.clicked.connect(self.changeGlobal)
         self.btnFitPoly.clicked.connect(self.smoothParameter) 
         
-        self.btnGroupSelect = IconButton(icons_location/'group.png', self)
+        self.btnGroupSelect = IconButton(icons_location/'group.png', self, start_grayscale=True, support_three_states=True)
         self.btnGroupSelect.clicked.connect(self.changeGlobal)
-        self.btnGroupSelect.clicked.connect(self.selectGroups) 
+        self.btnGroupSelect.clicked.connect(self.selectGroups)
+        self.group_selection_mode = 0
+        self.rectangle_selector = None
         
         self.btnInterRings = IconButton(icons_location/'interpolate.png', self, start_grayscale=True)
         self.btnInterRings.clicked.connect(self.changeGlobal)
@@ -632,8 +636,93 @@ class GraphWidget(QtWidgets.QWidget):
         #First we get the desired input
         self.create_polyfit_dialog()
     def selectGroups(self):
-        QtWidgets.QMessageBox.information(self,'Information','Group selection not yet implemented.')
+        """Cycle through group selection modes"""
+        self.group_selection_mode = (self.group_selection_mode + 1) % 3
+        self.btnGroupSelect.cycle_state()
+        
+        if self.group_selection_mode > 0:
+            # Enable rectangle selector
+            if self.rectangle_selector is None:
+                self.rectangle_selector = RectangleSelector(
+                    self.ax,
+                    self._on_group_select,
+                    useblit=True,
+                    button=[1],
+                    minspanx=5, minspany=5,
+                    spancoords='pixels',
+                    interactive=False,
+                    props=dict(facecolor='cyan', edgecolor='blue', 
+                              alpha=0.3, fill=True, linewidth=2)
+                )
+            self.rectangle_selector.set_active(True)
+            if self.group_selection_mode == 1:
+                print(f"Group selection mode: SET TO_FIT=True (green)")
+            else:
+                print(f"Group selection mode: SET TO_FIT=False (red)")
+        else:
+            # Disable rectangle selector
+            if self.rectangle_selector is not None:
+                self.rectangle_selector.set_active(False)
+            print(f"Group selection mode OFF")
 
+    def _on_group_select(self, eclick, erelease):
+        """Handle rectangle selection - update TO_FIT and INTERPOLATION for selected points"""
+        try:
+            # Get rectangle bounds
+            x1, y1 = eclick.xdata, eclick.ydata
+            x2, y2 = erelease.xdata, erelease.ydata
+            
+            if x1 is None or x2 is None or y1 is None or y2 is None:
+                return
+            
+            # Ensure x1 < x2 and y1 < y2
+            x_min, x_max = min(x1, x2), max(x1, x2)
+            y_min, y_max = min(y1, y2), max(y1, y2)
+            
+            # Find points within rectangle
+            selected_count = 0
+            rings = []
+            for i, (x, y) in enumerate(zip(self.parValRADI, self.parVals)):
+                if x_min <= x <= x_max and y_min <= y <= y_max:
+                    rings.append(i+1)
+                    ring_key = f"RING_{i+1}"
+                    if ring_key in self.parameterFitSetting:
+                        if self.group_selection_mode == 1:
+                            # Mode 1: Set TO_FIT = True and INTERPOLATION = False
+                            self.parameterFitSetting[ring_key]['TO_FIT'] = True
+                            self.parameterFitSetting[ring_key]['INTERPOLATION'] = False
+                        elif self.group_selection_mode == 2:
+                            # Mode 2: Set TO_FIT = False
+                            self.parameterFitSetting[ring_key]['TO_FIT'] = False
+                        selected_count += 1
+            
+            if selected_count > 0:
+               
+                if self.group_selection_mode == 1:
+                    print(f"Updated {selected_count} ring(s): TO_FIT=True, INTERPOLATION=False")
+                    minring = min(rings)
+                    maxring = max(rings)
+                    for ring in rings:
+                        self.parameterFitSetting[f"RING_{ring}"]['GROUP'] = [minring, maxring]
+                        if minring != maxring:
+                            self.parameterFitSetting[f"RING_{ring}"]['BLOCK_FIT'] = True
+                else:
+                    print(f"Updated {selected_count} ring(s): TO_FIT=False")
+                    minring = min(rings)
+                    maxring = max(rings)
+                    for ring in rings:
+                        self.parameterFitSetting[f"RING_{ring}"]['GROUP'] = [ring, ring]
+                        if minring != maxring:
+                            self.parameterFitSetting[f"RING_{ring}"]['BLOCK_FIT'] = False
+                # Update the plot to show new colors
+                self.key = "Yes"
+                self.plotFunc()
+            else:
+                print("No points selected in rectangle")
+                
+        except Exception as e:
+            print(f"Error in group selection: {e}")
+    
     def selectInterRings(self):
         """Toggle interpolation mode - when active, clicking points toggles INTERPOLATION"""
         self.interpolation_mode = not self.interpolation_mode
@@ -849,6 +938,10 @@ class GraphWidget(QtWidgets.QWidget):
 
        
         if event.button == 1 and not event.xdata is None:
+            # Disable rectangle selector during interpolation mode
+            if self.interpolation_mode and self.rectangle_selector is not None:
+                self.rectangle_selector.set_active(False)
+            
             # Check if we're in interpolation mode
             if self.interpolation_mode:
                 # Toggle INTERPOLATION for the clicked point
@@ -861,14 +954,21 @@ class GraphWidget(QtWidgets.QWidget):
                       
                       
                          
-                        current_interp = self.parameterFittingSetting[ring_key]['INTERPOLATION']
-                        self.parameterFittingSetting[ring_key]['INTERPOLATION'] = not current_interp
+                        current_interp = self.parameterFitSetting[ring_key]['INTERPOLATION']
+                        self.parameterFitSetting[ring_key]['INTERPOLATION'] = not current_interp
                               
                         self.key = "Yes"
                         self.plotFunc()
                 except Exception as e:
                     print(f"Error toggling interpolation: {e}")
                 return  # Don't start dragging in interpolation mode
+            
+            # Don't allow dragging during group selection mode
+            if self.group_selection_mode:
+                # Re-enable rectangle selector if group mode is active
+                if self.rectangle_selector is not None:
+                    self.rectangle_selector.set_active(True)
+                return  # Don't start dragging in group selection mode
             
             self.mPress[0] = event.xdata
             self.mPress[1] = event.ydata
@@ -1067,15 +1167,15 @@ class GraphWidget(QtWidgets.QWidget):
         colors = []
         par_name = self.par
         
-        if not self.parameterFittingSetting['TO_FIT']:
+        if not self.parameterFitSetting['TO_FIT']:
             colors = ['red'] * len(self.parVals)
         else:
             for i in range(len(self.parVals)):
                 ring_key = f"RING_{i+1}"     
-                if not self.parameterFittingSetting[ring_key]['TO_FIT']:
+                if not self.parameterFitSetting[ring_key]['TO_FIT']:
                         # Red: not fitted
                     colors.append('red')
-                elif self.parameterFittingSetting[ring_key]['INTERPOLATION']:
+                elif self.parameterFitSetting[ring_key]['INTERPOLATION']:
                         # Blue: fitted but interpolated
                     colors.append('blue')
                 else:
@@ -1129,7 +1229,7 @@ class GraphWidget(QtWidgets.QWidget):
                                            animated=True, edgecolors='black', linewidths=0.5)
         # Add connecting lines in grey
         self.line_connecting, = self.ax.plot(self.parValRADI, self.parVals, '--', 
-                                            color='blue', alpha=0.75, zorder=3, 
+                                            color='green', alpha=0.75, zorder=3, 
                                             animated=True, linewidth=1)
    
        
@@ -1352,12 +1452,14 @@ class SMWindow(QtWidgets.QWidget):
         self.close()
         QtWidgets.QMessageBox.information(self, "Information", "Done!")
 class IconButton(QtWidgets.QPushButton):
-    def __init__(self,image_path, parent=None, start_grayscale=False):
+    def __init__(self,image_path, parent=None, start_grayscale=False, support_three_states=False):
         super(IconButton, self).__init__('', parent)
         self.setFixedSize(40, 40)
         self.image_path = image_path
         self.original_pixmap = QtGui.QPixmap(str(image_path))
         self.is_grayscale = start_grayscale
+        self.support_three_states = support_three_states
+        self.state = 0 if start_grayscale else 1
         
         if start_grayscale:
             self._apply_grayscale()
@@ -1377,6 +1479,36 @@ class IconButton(QtWidgets.QPushButton):
                 gray = int(0.299 * pixel.red() + 0.587 * pixel.green() + 0.114 * pixel.blue())
                 image.setPixelColor(x, y, QtGui.QColor(gray, gray, gray, pixel.alpha()))
         self.setIcon(QtGui.QIcon(QtGui.QPixmap.fromImage(image)))
+    
+    def _apply_red_glow(self):
+        """Apply red glow/overlay to icon"""
+        image = self.original_pixmap.toImage()
+        for x in range(image.width()):
+            for y in range(image.height()):
+                pixel = image.pixelColor(x, y)
+                red = min(255, pixel.red() + 100)
+                green = int(pixel.green() * 0.5)
+                blue = int(pixel.blue() * 0.5)
+                image.setPixelColor(x, y, QtGui.QColor(red, green, blue, pixel.alpha()))
+        self.setIcon(QtGui.QIcon(QtGui.QPixmap.fromImage(image)))
+    
+    def set_state(self, state):
+        """Set button state: 0=grayscale, 1=normal, 2=red glow"""
+        self.state = state
+        if state == 0:
+            self._apply_grayscale()
+        elif state == 1:
+            self.setIcon(QtGui.QIcon(self.original_pixmap))
+        elif state == 2:
+            self._apply_red_glow()
+    
+    def cycle_state(self):
+        """Cycle through states"""
+        if self.support_three_states:
+            self.state = (self.state + 1) % 3
+        else:
+            self.state = 1 - self.state
+        self.set_state(self.state)
     
     def set_grayscale(self, grayscale):
         """Toggle between grayscale and full color"""
@@ -1810,14 +1942,18 @@ class MainWindow(QtWidgets.QMainWindow):
             val = value.split(".")
             # check val has decimal & fractional part and append length of numbers of
             # fractional part
+           
             if len(val) == 2:
                 decPoints.append(len(val[1].split('E')[0]))
-
+        if 'E' in value.upper():
+            tpe = 'E'
+        else:
+            tpe = 'f'
         # assign greatest precision in decPoints to class variables handling precision
         if len(decPoints) == 0:
-            return 0
+            return [0, tpe]
         else:
-            return max(decPoints)
+            return [max(decPoints), tpe]
 
     def getParameter(self):
         """Fetches data points of specified parameter
@@ -2167,7 +2303,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                                       " be at least the same as the current number of parameters"
                                                       " on viewgraph")
 
-    def saveFile(self, newVals, sKey, unitMeasurement, numPrecisionX, numPrecisionY):
+    def saveParameter(self, newVals, newValsErr, sKey,
+                 numPrecision):
         """Save changes made to data points to .def file per specified parameter
 
         Keyword arguments:
@@ -2184,41 +2321,12 @@ class MainWindow(QtWidgets.QMainWindow):
         """
 
         # get the new values and format it as e.g. [0 20 30 40 50...]
-        txt = ""
-        for i in range(len(newVals)):
-            if sKey == 'RADI':
-                txt = txt+" " +'{0:.{1}E}'.format(newVals[i], numPrecisionX)
-            else:
-                txt = txt+" " +'{0:.{1}E}'.format(newVals[i], numPrecisionY)
-
-        # FIXME (11-06-2018) put this block of code in a try except block
-        tmpFile = []
-        with open(self.fileName, 'a') as f:
-            status = False
-            for i in self.data:
-                lineVals = i.split("=")
-                if len(lineVals) > 1:
-                    lineVals[0] = ''.join(lineVals[0].split())
-                    if sKey == lineVals[0]:
-                        txt = "    "+sKey+"="+txt+"\n"
-                        tmpFile.append(txt)
-                        status = True
-                    else:
-                        tmpFile.append(i)
-                else:
-                    tmpFile.append(i)
-
-            if not status:
-                tmpFile.append("# "+sKey+" parameter in "+unitMeasurement+"\n")
-                txt = "    "+sKey+"="+txt+"\n"
-                tmpFile.append(txt)
-
-            f.seek(0)
-            f.truncate()
-            for i in tmpFile:
-                f.write(i)
-
-            self.data = tmpFile[:]
+        precision = f'.{numPrecision[0]}{numPrecision[1].lower()}'
+        self.Tirific_Template[sKey] = ' '.join([f'{val:{precision}}' for val in newVals])
+        self.Tirific_Template[f'# {sKey}_ERR'] = ' '.join([f'{val:{precision}}' for val in newValsErr])
+        # update fitting settings in the template
+    def updateFitSetting(self, parValsFitSetting, sKey):
+          
 
     def saveAll(self):
         """Save changes made to data point to .def file for all parameters
@@ -2233,8 +2341,10 @@ class MainWindow(QtWidgets.QMainWindow):
         The saveFile function is called and updated with the current values being
         held by parameters.
         """
+        self.dat
         for i in self.gwObjects:
-            self.saveFile(i.parVals, i.par, i.unitMeas, i.numPrecisionX, i.numPrecisionY)
+            self.saveFile(i.parVals,i.parValsErr,i.parameterFitSetting,
+                i.par, i.unitMeas, i.numPrecisionX, i.numPrecisionY)
 
         self.saveMessage()
 
@@ -2253,7 +2363,7 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(self, "Information",
                                           "Changes successfully written to file")
 
-    def saveAs(self, fileName, newVals, sKey, unitMeasurement, numPrecisionX,
+    def saveAs(self, fileName, newVals, sKey, unitMeasurement, numPrecision,
                numPrecisionY):
         """Creates a new .def file with current data points on viewgraph
 
@@ -2342,8 +2452,10 @@ class MainWindow(QtWidgets.QMainWindow):
                                                          os.getcwd(),
                                                          ".def Files (*.def)")
         for i in self.gwObjects:
-            self.saveAs(fileName, i.parVals, i.par, i.unitMeas, i.numPrecisionX,
-                        i.numPrecisionY)
+            self.saveFile(i.parVals,i.parValsErr,i.parameterFitSetting,
+                i.par, i.unitMeas, i.numPrecisionX, i.numPrecisionY)
+
+         
 
         self.saveAsMessage()
 
@@ -2801,8 +2913,10 @@ class MainWindow(QtWidgets.QMainWindow):
         fitsfilePath = fitsfilePath + "/" + self.INSET
         if os.path.isfile(fitsfilePath):
             for i in self.gwObjects:
+                
                 self.saveFile(
-                    i.parVals, i.par, i.unitMeas, i.numPrecisionX, i.numPrecisionY)
+                    i.parVals, i.parValsErr, i.parameterFitSetting,
+                    i.par, i.unitMeas, i.numPrecisionX, i.numPrecisionY)
 
             tmpFile = []
             with open(self.fileName, 'a') as f:
