@@ -244,7 +244,7 @@ classes:
 """
 
 # libraries
-import os, sys, threading, time, logging
+import os, sys, threading, time, logging,pickle
 os.environ["QT_API"] = "pyqt6"
 from subprocess import Popen as run
 from math import ceil
@@ -260,7 +260,9 @@ import matplotlib.pyplot as plt
 from matplotlib import style
 style.use("seaborn-v0_8")
 from PyQt6 import QtCore, QtWidgets,QtGui
-
+import pyFAT_astro.Support.support_functions as FAT_sup
+import TRM_errors.tirshaker.tirshaker as fit_functions
+from pyFAT_astro.Support.modify_template import fit_polynomial
 # --- Modern theme (QSS) -------------------------------------------------------
 def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str | None = None) -> None:
     """Apply a sleek, modern style across the app. Optional background image.
@@ -271,7 +273,6 @@ def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str |
     """
     QtWidgets.QApplication.setStyle("Fusion")
 
-    print(background_image_path)
     # Dark palette baseline
     palette = QtGui.QPalette()
     base = QtGui.QColor(37, 37, 38)
@@ -479,7 +480,8 @@ class GraphWidget(QtWidgets.QWidget):
     _progress = None
 
     def __init__(self, xScale, yScale, unitMeas, par, parVals,parValsErr, parValRADI,
-            key, numPrecisionX, numPrecisionY,initial_width,initial_height):
+            key, numPrecisionX, numPrecisionY,pyFAT_Configuration,Tirific_Template,
+            paramenterFittingSetting):
         super(GraphWidget, self).__init__()
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet("background-color: transparent;")
@@ -487,6 +489,8 @@ class GraphWidget(QtWidgets.QWidget):
                            QtWidgets.QSizePolicy.Policy.Expanding)
         self.xScale = xScale
         self.yScale = yScale
+        self.pyFAT_Configuration = pyFAT_Configuration
+        self.Tirific_Template = Tirific_Template
         self.unitMeas = unitMeas
         self.par = par
         self.parVals = parVals
@@ -498,6 +502,7 @@ class GraphWidget(QtWidgets.QWidget):
         self.key = key
         self.numPrecisionX = numPrecisionX
         self.numPrecisionY = numPrecisionY
+        self.parameterFittingSetting = paramenterFittingSetting
         #self.setFixedSize(initial_width, initial_height)
         # Grid Layout
         grid = QtWidgets.QGridLayout()
@@ -529,6 +534,7 @@ class GraphWidget(QtWidgets.QWidget):
 
         # Persistent artists for fast updates
         self.line_current = None
+        self.line_connecting = None
         self.line_original = None
         self.err_container = None
         self.background = None  # For blitting
@@ -557,9 +563,10 @@ class GraphWidget(QtWidgets.QWidget):
         self.btnGroupSelect.clicked.connect(self.changeGlobal)
         self.btnGroupSelect.clicked.connect(self.selectGroups) 
         
-        self.btnInterRings = IconButton(icons_location/'interpolate.png', self)
+        self.btnInterRings = IconButton(icons_location/'interpolate.png', self, start_grayscale=True)
         self.btnInterRings.clicked.connect(self.changeGlobal)
-        self.btnInterRings.clicked.connect(self.selectInterRings) 
+        self.btnInterRings.clicked.connect(self.selectInterRings)
+        self.interpolation_mode = False 
         
         #self.btnEditParam.setToolTip('Modify plotted parameter')
 
@@ -628,7 +635,15 @@ class GraphWidget(QtWidgets.QWidget):
         QtWidgets.QMessageBox.information(self,'Information','Group selection not yet implemented.')
 
     def selectInterRings(self):
-        QtWidgets.QMessageBox.information(self,'Information','Selecting the rings to interpolate over not yet implemented.')
+        """Toggle interpolation mode - when active, clicking points toggles INTERPOLATION"""
+        self.interpolation_mode = not self.interpolation_mode
+        self.btnInterRings.toggle_grayscale()
+        
+        if self.interpolation_mode:
+            # Show status message
+            print(f"Interpolation mode ON - click points to toggle INTERPOLATION status")
+        else:
+            print(f"Interpolation mode OFF")
 
     def fitPolynomial(self):
         mindegree = int(self.inp.minDegree.currentText())
@@ -649,16 +664,7 @@ class GraphWidget(QtWidgets.QWidget):
             if self.inp.innerFlatrings.text() != '':
                 inner_flatrings = int(self.inp.innerFlatrings.text())
         
-        Configuration = {'DEBUG': True,
-                         'DEBUG_FUNCTION':'ALL',
-                         'VERBOSE_LOG': False,
-                         'VERBOSE_SCREEN': False,
-                         'OUTPUTLOG': None,
-                         'TIMING': False,
-                         'NO_RINGS': len(values),
-                         'LAST_RELIABLE_RINGS': [len(values),len(values)],
-                        }
-        Tirific_Template = {f'{self.par}': values,}
+    
 
         if key in ['INCL','PA']:
             if self.inp.warped.isChecked():
@@ -667,14 +673,7 @@ class GraphWidget(QtWidgets.QWidget):
                 return
         self.inp.close()
         zero_point = None
-        if key in ['VROT']:
-            zero_point = values[0]
-            Configuration['CHANNEL_WIDTH'] = min(errors)
-            Configuration['RC_UNRELIABLE'] = len(values)
-            if hasattr(self.inp, 'flatOuterRings') and self.inp.flatOuterRings.text() != '':
-                Configuration['RC_UNRELIABLE'] = len(values)-int(self.inp.flatOuterRings.text())
-            print(Configuration['RC_UNRELIABLE'])
-
+       
         # Show a modal busy dialog
         self._progress = QtWidgets.QProgressDialog("Fitting polynomial…", None, 0, 0, self)
         self._progress.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
@@ -708,7 +707,7 @@ class GraphWidget(QtWidgets.QWidget):
             @QtCore.pyqtSlot()
             def run(self):
                 try:
-                    from pyFAT_astro.Support.modify_template import fit_polynomial
+                   
                     fitted_values, final_poly = fit_polynomial(
                         self.Configuration,
                         self.radii,
@@ -726,7 +725,9 @@ class GraphWidget(QtWidgets.QWidget):
                 except Exception as e:
                     self.errored.emit(str(e))
 
-        self._fit_worker = FitWorker(Configuration, radii, values, errors, key, self.par, Tirific_Template, inner_flatrings, zero_point, limits, [mindegree, maxdegree])
+        self._fit_worker = FitWorker(self.pyFAT_Configuration, radii, 
+            values, errors, key, self.par, self.Tirific_Template, 
+            inner_flatrings, zero_point, limits, [mindegree, maxdegree])
         self._fit_worker.moveToThread(self._fit_thread)
         self._fit_thread.started.connect(self._fit_worker.run)
 
@@ -735,6 +736,7 @@ class GraphWidget(QtWidgets.QWidget):
                 print(f'We fitted {self.par} with polynomial order {final_poly}')
                 print(f'We got these values {fitted_values}')
                 self.parVals = fitted_values
+                self.yScale = set_plotScale(fitted_values)
                 self.key = "Yes"
                 self.plotFunc()
             finally:
@@ -782,12 +784,20 @@ class GraphWidget(QtWidgets.QWidget):
         # Temporarily hide the current line to capture a clean background
         if self.line_current is not None:
             was_visible = self.line_current.get_visible()
+            was_connecting_visible = False
             self.line_current.set_visible(False)
+            if self.line_connecting is not None:
+                was_connecting_visible = self.line_connecting.get_visible()
+                self.line_connecting.set_visible(False)
             self.background = self.canvas.copy_from_bbox(self.ax.bbox)
             # Restore visibility
             self.line_current.set_visible(was_visible)
+            if self.line_connecting is not None:
+                self.line_connecting.set_visible(was_connecting_visible)
 
             # Immediately re-blit the current line so it appears after full draws
+            if self.line_connecting is not None:
+                self.ax.draw_artist(self.line_connecting)
             self.ax.draw_artist(self.line_current)
             self.canvas.blit(self.ax.bbox)
         else:
@@ -839,6 +849,27 @@ class GraphWidget(QtWidgets.QWidget):
 
        
         if event.button == 1 and not event.xdata is None:
+            # Check if we're in interpolation mode
+            if self.interpolation_mode:
+                # Toggle INTERPOLATION for the clicked point
+                try:
+                    distances = [abs(event.xdata - x) for x in self.parValRADI]
+                    j = int(np.argmin(distances))
+                    if abs(event.xdata - self.parValRADI[j]) <= 3:
+                        # Toggle interpolation for this ring
+                        ring_key = f"RING_{j+1}"
+                      
+                      
+                         
+                        current_interp = self.parameterFittingSetting[ring_key]['INTERPOLATION']
+                        self.parameterFittingSetting[ring_key]['INTERPOLATION'] = not current_interp
+                              
+                        self.key = "Yes"
+                        self.plotFunc()
+                except Exception as e:
+                    print(f"Error toggling interpolation: {e}")
+                return  # Don't start dragging in interpolation mode
+            
             self.mPress[0] = event.xdata
             self.mPress[1] = event.ydata
             self.mRelease[0] = None
@@ -961,9 +992,17 @@ class GraphWidget(QtWidgets.QWidget):
             # if the mouse pointer moves out of the figure canvas use
             # the last value to redraw the graph
             if event.ydata is None:
-                self.last_value += 0.1 * self.last_value
+        
+                bottom,top = self.ax.get_ylim()
+                plotrange = top - bottom
+                if abs(top-self.last_value) < abs(bottom - self.last_value):
+                    self.last_value += 0.1 * abs(plotrange)
+                else:
+                    self.last_value -= 0.1 * abs(plotrange)
                 self.mMotion[0] = self.last_value
+              
             else:
+               
                 self.last_value = event.ydata
                 self.mMotion[0] = event.ydata
             self.plotFunc()
@@ -1019,6 +1058,33 @@ class GraphWidget(QtWidgets.QWidget):
             self.showInformation()
 
 
+    def _get_point_colors(self):
+        """Get colors for each point based on TO_FIT and INTERPOLATION status.
+        
+        Returns:
+            list: Color for each point ('red', 'blue', or 'green')
+        """
+        colors = []
+        par_name = self.par
+        
+        if not self.parameterFittingSetting['TO_FIT']:
+            colors = ['red'] * len(self.parVals)
+        else:
+            for i in range(len(self.parVals)):
+                ring_key = f"RING_{i+1}"     
+                if not self.parameterFittingSetting[ring_key]['TO_FIT']:
+                        # Red: not fitted
+                    colors.append('red')
+                elif self.parameterFittingSetting[ring_key]['INTERPOLATION']:
+                        # Blue: fitted but interpolated
+                    colors.append('blue')
+                else:
+                        # Green: fitted and not interpolated
+                    colors.append('green')
+                
+        
+        return colors
+
     def showInformation(self):
         """Show the information message
 
@@ -1054,8 +1120,17 @@ class GraphWidget(QtWidgets.QWidget):
         self.ax.set_ylabel(self.par + "( "+self.unitMeas+ " )")
 
         # Create persistent artists once, then update data
-       
-        (self.line_current,) = self.ax.plot(self.parValRADI, self.parVals, '--bo', zorder=4,animated=True)
+        # Get colors for each point based on fitting status
+        point_colors = self._get_point_colors()
+        
+        # Use scatter plot for individual point colors
+        self.line_current = self.ax.scatter(self.parValRADI, self.parVals, 
+                                           c=point_colors, s=50, zorder=4, 
+                                           animated=True, edgecolors='black', linewidths=0.5)
+        # Add connecting lines in grey
+        self.line_connecting, = self.ax.plot(self.parValRADI, self.parVals, '--', 
+                                            color='blue', alpha=0.75, zorder=3, 
+                                            animated=True, linewidth=1)
    
        
         self.ax.plot(self.parValRADI, self.originalparVals, '--ro', alpha=0.2, zorder=2)
@@ -1070,11 +1145,15 @@ class GraphWidget(QtWidgets.QWidget):
         #Make sure to catch the current line in the limits
         if self.line_current is not None:
             self.line_current.set_visible(True)
+            if self.line_connecting is not None:
+                self.line_connecting.set_visible(True)
             self.canvas.draw()
         ylimits = self.ax.get_ylim()
         # Hide the animated line before the full draw to keep background clean
         if self.line_current is not None:
             self.line_current.set_visible(False)
+            if self.line_connecting is not None:
+                self.line_connecting.set_visible(False)
         # Full draw for non-animated artists (axes, error bars, originals)
         self.ax.set_ylim(ylimits[0], ylimits[1])
         self.canvas.draw()
@@ -1082,6 +1161,10 @@ class GraphWidget(QtWidgets.QWidget):
         self.background = self.canvas.copy_from_bbox(self.ax.bbox)
         #if self.line_current is not None:
         self.line_current.set_visible(True)
+        if self.line_connecting is not None:
+            self.line_connecting.set_visible(True)
+        if self.line_connecting is not None:
+            self.ax.draw_artist(self.line_connecting)
         self.ax.draw_artist(self.line_current)
         self.canvas.blit(self.ax.bbox)
         self.canvas.flush_events()
@@ -1116,7 +1199,15 @@ class GraphWidget(QtWidgets.QWidget):
                     self.parVals[j] = new_y
 
                     # Update current line data only
-                    self.line_current.set_ydata(self.parVals)
+                    # Update scatter plot offsets
+                    offsets = list(zip(self.parValRADI, self.parVals))
+                    self.line_current.set_offsets(offsets)
+                    # Update colors in case fitting status changed
+                    point_colors = self._get_point_colors()
+                    self.line_current.set_color(point_colors)
+                    # Update connecting line
+                    if self.line_connecting is not None:
+                        self.line_connecting.set_ydata(self.parVals)
 
                     # Adjust limits only if new point is outside current view
                     bottom, top = self.ax.get_ylim()
@@ -1124,15 +1215,20 @@ class GraphWidget(QtWidgets.QWidget):
                         max_yvalue = float(np.max(self.parVals))
                         min_yvalue = float(np.min(self.parVals))
                         span = max(1e-9, (max_yvalue - min_yvalue))
+                      
                         bottom = min_yvalue - 0.1 * span
                         top = max_yvalue + 0.1 * span
+                      
                         self.ax.set_ylim(bottom, top)
                         self.background = None  # Invalidate cached background
+                       
                         self.canvas.draw_idle()
                     else:    
                         # Blit-accelerated redraw (only changed region)
                         if self.background is not None:
-                            self.canvas.restore_region(self.background) 
+                            self.canvas.restore_region(self.background)
+                            if self.line_connecting is not None:
+                                self.ax.draw_artist(self.line_connecting)
                             self.ax.draw_artist(self.line_current)
                             self.canvas.blit(self.ax.bbox)
                             self.canvas.flush_events()
@@ -1197,7 +1293,7 @@ class SMWindow(QtWidgets.QWidget):
         self.hboxBtns.addStretch(1)
         self.btnUpdate = IconButton(icons_location/'OK.png', self) 
         self.btnUpdate.clicked.connect(self.updateScale)     
-        self.btnCancel = IconButton(icons_location/'Cancel.png', self)   
+        self.btnCancel = IconButton(icons_location/'cancel.png', self)   
 
         self.btnCancel.clicked.connect(self.close)
         self.hboxBtns.addWidget(self.btnUpdate)
@@ -1256,13 +1352,43 @@ class SMWindow(QtWidgets.QWidget):
         self.close()
         QtWidgets.QMessageBox.information(self, "Information", "Done!")
 class IconButton(QtWidgets.QPushButton):
-    def __init__(self,image_path, parent=None ):
+    def __init__(self,image_path, parent=None, start_grayscale=False):
         super(IconButton, self).__init__('', parent)
         self.setFixedSize(40, 40)
-        self.setIcon(QtGui.QIcon(QtGui.QPixmap(str(image_path))))
+        self.image_path = image_path
+        self.original_pixmap = QtGui.QPixmap(str(image_path))
+        self.is_grayscale = start_grayscale
+        
+        if start_grayscale:
+            self._apply_grayscale()
+        else:
+            self.setIcon(QtGui.QIcon(self.original_pixmap))
+        
         self.setFlat(True)
         self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         self.setIconSize(QtCore.QSize(40,40))
+    
+    def _apply_grayscale(self):
+        """Convert icon to grayscale"""
+        image = self.original_pixmap.toImage()
+        for x in range(image.width()):
+            for y in range(image.height()):
+                pixel = image.pixelColor(x, y)
+                gray = int(0.299 * pixel.red() + 0.587 * pixel.green() + 0.114 * pixel.blue())
+                image.setPixelColor(x, y, QtGui.QColor(gray, gray, gray, pixel.alpha()))
+        self.setIcon(QtGui.QIcon(QtGui.QPixmap.fromImage(image)))
+    
+    def set_grayscale(self, grayscale):
+        """Toggle between grayscale and full color"""
+        self.is_grayscale = grayscale
+        if grayscale:
+            self._apply_grayscale()
+        else:
+            self.setIcon(QtGui.QIcon(self.original_pixmap))
+    
+    def toggle_grayscale(self):
+        """Toggle grayscale state"""
+        self.set_grayscale(not self.is_grayscale)
       
 class PolyFitWindow(QtWidgets.QWidget):
     
@@ -1315,7 +1441,7 @@ class PolyFitWindow(QtWidgets.QWidget):
             self.grid.addWidget(self.innerFlatrings, 5, 1)
 
         self.btnOK = IconButton(icons_location/'OK.png', self)       
-        self.btnCancel = IconButton(icons_location/'Cancel.png', self)   
+        self.btnCancel = IconButton(icons_location/'cancel.png', self)   
 
         self.hbox = QtWidgets.QHBoxLayout()
         #self.hbox.addStretch(1)
@@ -1385,7 +1511,7 @@ class ParamSpec(QtWidgets.QWidget):
             self.grid.addWidget(self.afterParameter, 3, 1)
         
         self.btnOK = IconButton(icons_location/'OK.png', self)       
-        self.btnCancel = IconButton(icons_location/'Cancel.png', self)   
+        self.btnCancel = IconButton(icons_location/'cancel.png', self)   
 
         self.hbox = QtWidgets.QHBoxLayout()
         #self.hbox.addStretch(1)
@@ -1408,7 +1534,7 @@ class MainWindow(QtWidgets.QMainWindow):
     loops = 0
     ncols = 5; nrows = 5
     INSET = 'None'
-    par = ['VROT', 'SBR', 'INCL', 'PA','SDIS','XPOS']
+    par = ['VROT', 'SBR', 'INCL', 'PA']
     tmpDeffile = os.getcwd() + "/tmpDeffile.def"
     progressPath = ''
     fileName = ""
@@ -1423,6 +1549,10 @@ class MainWindow(QtWidgets.QMainWindow):
     parVals = {}
     parValsErr = {}
     historyList = {}
+    pyFAT_conf_file = None
+    noise = 0.0
+    beam = [0.0, 0.0, 0.0]
+    channel_width = 0.0
     xScale = [0, 0]
     yScale = {'VROT':[0, 0]}
     mPress = [-5]
@@ -1433,6 +1563,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
         self.initUI()
+        
         # monitor-based sizing was commented out; default to fixed initial dimensions
         monitor = QtWidgets.QApplication.primaryScreen()
         monitor_size = monitor.size()
@@ -1569,36 +1700,30 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.t != 0:
             self.t.cancel()
         QtWidgets.qApp.quit()
+    def setPFConfig(self):
+        
+        try:
+            self.pyFAT_Configuration = pickle.load(self.pyFAT_config_file)    
+        except Exception as e:
+          
+            self.pyFAT_Configuration = {'DEBUG': True,
+                         'DEBUG_FUNCTION':'ALL',
+                         'VERBOSE_LOG': False,
+                         'VERBOSE_SCREEN': False,
+                         'OUTPUTLOG': None,
+                         'TIMING': False,
+                         'NOISE': float(self.Tirific_Template['RMS']),
+                         'BEAM': [float(self.Tirific_Template['BMAJ']), 
+                                  float(self.Tirific_Template['BMIN']), 
+                                  float(self.Tirific_Template['BPA'])],
+                         'CHANNEL_WIDTH': 0.,
+                         'NO_RINGS': self.NUR,
+                         'LIMIT_MODIFIER': [1.0],
+                         'LAST_RELIABLE_RINGS': [self.NUR,self.NUR],
+                         'RC_UNRELIABLE': self.NUR,
+                        }
+          
 
-    def cleanUp(self):
-        #This doesn't do anything at the moment
-        # FIXME(Samuel 11-06-2018): Find a way to do this better
-
-        self.key = "Yes"
-        self.ncols = 5; self.nrows = 5
-        self.INSET = 'None'
-        self.par = ['VROT', 'SBR', 'INCL', 'PA','SDIS','XPOS']
-        self.unitMeas = ['km/s', 'Jy km/s/sqarcs', 'degrees', 'degrees','km/s','degrees']
-        # FIXME use Lib/tempfile.py to create temporary file
-        self.tmpDeffile = os.getcwd() + "/tmpDeffile.def"
-        self.fileName = ""
-        self.gwObjects = []
-        self.t = 0
-        self.scrollWidth = 0; self.scrollHeight = 0
-        self.before = 0
-        self.numPrecisionY = {}
-        self.numPrecisionX = 0
-        self.NUR = 0
-        self.data = []
-        self.parVals = {}
-        self.historyList = {}
-        self.xScale = [0, 0]
-        self.yScale = {'VROT':[0, 0]}
-        self.mPress = [-5]
-        self.mRelease = ['None']
-        self.mMotion = [-5]
-
-        self.initUI()
 
     def getData(self):
         """Loads data from specified .def file in open dialog box
@@ -1622,6 +1747,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # assign texts of read lines to data variable if fileName is exists, else assign
         # None
+       
         try:
             with open(self.fileName) as f:
                 data = f.readlines()
@@ -1659,7 +1785,7 @@ class MainWindow(QtWidgets.QMainWindow):
             except:
                 return 'str'
 
-    def numPrecision(self, data):
+    def numPrecision(self, string_value_line):
         """Determines and sets floating point precision
 
         Keyword arguments:
@@ -1677,13 +1803,13 @@ class MainWindow(QtWidgets.QMainWindow):
         decPoints = []
         # ensure values from list to are converted string
         # FIX ME: Consider using enumerate instead of iterating with range and len
-        for i in range(len(data)):
-            data[i] = str(data[i])
-
-        for i in range(len(data)):
-            val = data[i].split(".")
-        # check val has decimal & fractional part and append length of numbers of
-        # fractional part
+        #for i in range(len(data)):
+        #    data[i] = str(data[i])
+        values = string_value_line.split()
+        for value in values:
+            val = value.split(".")
+            # check val has decimal & fractional part and append length of numbers of
+            # fractional part
             if len(val) == 2:
                 decPoints.append(len(val[1].split('E')[0]))
 
@@ -1693,7 +1819,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             return max(decPoints)
 
-    def getParameter(self, data):
+    def getParameter(self):
         """Fetches data points of specified parameter
 
         Keyword arguments:
@@ -1711,53 +1837,159 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         # search through fetched data for values of "PAR =" or "PAR = " or "PAR=" or
         # "PAR= "
-        global fit_par
+        self.NUR = int(self.Tirific_Template['NUR'])
+      
+        for key in self.Tirific_Template:
+            if len(self.Tirific_Template[key].split()) == self.NUR:
+                if not '_ERR' in key:
+                    if key == 'RADI':
+                        self.parValsRADI = np.array([float(x) for x in self.Tirific_Template[key].split()], dtype=np.float64)
+                        self.numPrecisionX = self.numPrecision(self.Tirific_Template[key])
+                      
+                    else:
+                        self.parVals[key] = np.array([float(x) for x in self.Tirific_Template[key].split()], dtype=np.float64)
+                        self.numPrecisionY[key] = self.numPrecision(self.Tirific_Template[key])
 
-        # I need NUR value first that's why it's on a different loop
-        for i in data:
-            lineVals = i.split("=")
-            if len(lineVals) > 1:
-                lineVals[0] = ''.join(lineVals[0].split())
-                if lineVals[0].upper() == "NUR":
-                    parVal = lineVals[1].split()
-                    self.NUR = int(parVal[0])
-                    break
-             
-        for i in data:
-            lineVals = i.split("=")
-            if len(lineVals) > 1:
-                lineVals[0] = ''.join(lineVals[0].split())
-                parVal = lineVals[1].split()
-              
-              
-                if lineVals[0].upper() == "INSET":
-                    self.INSET = ''.join(lineVals[1].split())
-                elif lineVals[0].upper() == "LOOPS":
-                    self.loops = int(parVal[0])
-                elif '_ERR' in lineVals[0].upper():
-                    param_name = lineVals[0][1:].upper().replace('_ERR', '')
-                    try:
-                        self.parValsErr[param_name] = [float(Decimal(val)) for val in parVal]
-                    except Exception as e:
-                        logging.error(f"Error processing error values for {param_name}: {e}")
                 else:
-                    if (len(parVal) > 0 and not self.strType(parVal[0]) == 'str' and
-                            not self.strType(parVal[-1]) == 'str' and
-                            not self.strType(parVal[int(len(parVal) / 2)]) == 'str'):
-                        if (len(parVal) == self.NUR or lineVals[0].upper() in
-                                fit_par.keys()):
-                            if lineVals[0].upper() == 'RADI':
-                                self.numPrecisionX = self.numPrecision(parVal[:])
-                            else:
-                                self.numPrecisionY[str.upper(lineVals[0])] = (
-                                    self.numPrecision(parVal[:]))
-                            for i in range(len(parVal)):
-                                parVal[i] = float(Decimal(parVal[i]))
-                            self.parVals[str.upper(lineVals[0])] = parVal[:]
+                    param_name = key[1:].replace('_ERR', '').strip()
+                    self.parValsErr[param_name] = np.array([float(x) for x in self.Tirific_Template[key].split()], dtype=np.float64)
+
+      
+        self.INSET = self.Tirific_Template['INSET']        
+        self.loops = int(self.Tirific_Template['LOOPS'])
+            
+       
         for key in self.parVals:
             if key not in self.parValsErr:
                 self.parValsErr[key] = [float('NaN')]*len(self.parVals[key])
+    def getFittingSettings(self):
+        """Fetches fitting settings from .def file
 
+        Keyword arguments:
+        self-- main window being displayed i.e. the current instance of the
+               mainWindow class
+        data (list)--  list containing texts of each line loaded from .def file
+
+        Returns:
+        None
+
+        The fitting settings such as number of loops and inset type are retrieved
+        from the .def file
+        """
+      
+        # Read what is in the current template and set up fitting groups   
+        fit_groups= fit_functions.get_fitted_groups(self.Tirific_Template,log=True,verbose=True)
+        varindex = self.obtain_varindx()
+        self.setRingFittingValues(fit_groups, varindex)
+      
+      
+
+
+    def setRingFittingValues(self, fit_groups, varindex):
+        self.parameterFittingSettings = {}
+        for parameter in self.parVals:
+            self.parameterFittingSettings[parameter] = {'TO_FIT': False}
+            for i in range(self.NUR):
+                self.parameterFittingSettings[parameter][f"RING_{i+1}"] ={ 
+                        'TO_FIT': False,
+                        'PARMIN': None,
+                        'PARMAX': None,
+                        'INTERPOLATION': False,
+                        'GROUP': [i+1,i+1],
+                        'BLOCK_FIT': False,
+                        'MODERATE': 5.,
+                        'DELSTART': 1.0,
+                        'DELEND': 0.0,
+                        'MINDELTA': 0.0,
+                        'ITESTART': None,
+                        'ITEEND': None,
+                        'SATDELTA': None,}
+        moderate = self.Tirific_Template['MODERATE'].split()
+        deltastart = self.Tirific_Template['DELSTART'].split()
+        deltaend = self.Tirific_Template['DELEND'].split()
+        mindelta = self.Tirific_Template['MINDELTA'].split()
+        itestart = self.Tirific_Template['ITESTART'].split()
+        iteend = self.Tirific_Template['ITEEND'].split()
+        satdelta = self.Tirific_Template['SATDELT'].split()
+        for group in fit_groups:
+            basename_group = group.split('_')[0]
+            disk = fit_groups[group]['DISKS']
+            for i in disk:
+                if i ==  1:
+                    basename= basename_group
+                else:
+                    basename = f"{basename_group}_{i}"
+                if f"{basename}" not in self.parameterFittingSettings:
+                    pass
+                else:
+                    self.parameterFittingSettings[f"{basename}"]["TO_FIT"] = True
+                    range_of_rings = fit_groups[group]['RINGS'][f'{i}']
+                    for ring in range(range_of_rings[0], range_of_rings[1]+1):
+                        self.parameterFittingSettings[f"{basename}"][f"RING_{ring}"]["TO_FIT"] = True
+                        self.parameterFittingSettings[f"{basename}"][f"RING_{ring}"]["GROUP"] = range_of_rings
+                        self.parameterFittingSettings[f"{basename}"][f"RING_{ring}"]["BLOCK_FIT"] = fit_groups[group]['BLOCK']
+                        self.parameterFittingSettings[f"{basename}"][f"RING_{ring}"]["PARMIN"] = fit_groups[group]['PARMIN']
+                        self.parameterFittingSettings[f"{basename}"][f"RING_{ring}"]["PARMAX"] = fit_groups[group]['PARMAX']
+                        if basename in varindex:
+                            if ring in varindex[basename]:
+                                self.parameterFittingSettings[f"{basename}"][f"RING_{ring}"]["INTERPOLATION"] = True
+
+                        if len(fit_groups) == len(moderate):
+                            self.parameterFittingSettings[f"{basename}"][
+                                f"RING_{ring}"]["MODERATE"] =\
+                                float(moderate[fit_groups[group]['COLUMN_ID']])
+                        if len(fit_groups) == len(deltastart):
+                            self.parameterFittingSettings[f"{basename}"][
+                                f"RING_{ring}"]["DELSTART"] =\
+                                float(deltastart[fit_groups[group]['COLUMN_ID']])
+                        if len(fit_groups) == len(deltaend):
+                            self.parameterFittingSettings[f"{basename}"][
+                                f"RING_{ring}"]["DELEND"] =\
+                                float(deltaend[fit_groups[group]['COLUMN_ID']])
+                        if len(fit_groups) == len(mindelta):
+                            self.parameterFittingSettings[f"{basename}"][
+                                f"RING_{ring}"]["MINDELTA"] =\
+                                float(mindelta[fit_groups[group]['COLUMN_ID']])
+                        if len(fit_groups) == len(itestart):
+                            self.parameterFittingSettings[f"{basename}"][
+                                f"RING_{ring}"]["ITESTART"] =\
+                                int(itestart[fit_groups[group]['COLUMN_ID']])
+                        if len(fit_groups) == len(iteend):
+                            self.parameterFittingSettings[f"{basename}"][
+                                f"RING_{ring}"]["ITEEND"] =\
+                                int(iteend[fit_groups[group]['COLUMN_ID']])
+                        if len(fit_groups) == len(satdelta):
+                            self.parameterFittingSettings[f"{basename}"][
+                                f"RING_{ring}"]["SATDELT"] =\
+                                float(satdelta[fit_groups[group]['COLUMN_ID']]) 
+
+
+    def obtain_varindx(self):
+        varindex = {}
+        varindx_line = self.Tirific_Template['VARINDX'].split()
+        for i in range(len(varindx_line)):
+            try:
+                value = int(varindx_line[i])
+            except:
+                if ':' in varindx_line[i]:
+                    parts = varindx_line[i].split(':')
+                    rings =[int(parts[0]), int(parts[1])]
+                    if rings[0] > rings[1]:
+                        rings[1] -= 1
+                        step = -1
+                    else:
+                        rings[1] += 1
+                        step =1
+                    for j in range(rings[0],rings[1],step):
+                        varindex[current_parameter].append(j)
+                else:   
+                    current_parameter = varindx_line[i]
+                    if current_parameter not in varindex:
+                        varindex[current_parameter] = []
+            else:
+                varindex[current_parameter].append(value)
+        return varindex
+       
     def openDef(self):
         """Opens data, gets parameter values, sets precision and sets scale
 
@@ -1772,21 +2004,28 @@ class MainWindow(QtWidgets.QMainWindow):
         values to dictionaries parVals and firstPlot historyList and defines
         the x-scale and y-scale for plotting on viewgraph
         """
-        global fit_par
-        data = self.getData()
+       
+        self.data = self.getData()
+        self.Tirific_Template = FAT_sup.tirific_template(self.fileName)
+      
         #self.getParameter(data)
         try:
-            self.getParameter(data)
-        except:
-            if data is None:
+            self.getParameter()
+            self.setPFConfig()
+            print(f'Obtained the Parameters from {self.fileName}')
+            self.getFittingSettings()
+            print(f'Obtained the Fitting Settings from {self.fileName}')
+        except Exception as e:
+            if self.data is None:
                 pass
             else:
+                print(e)
                 QtWidgets.QMessageBox.information(self, "Information",
-                                                  "Tilted-ring parameters not retrieved")
+                                                  "Tilted-ring fitting parameters not retrieved")
                 logging.info("The tilted-ring parameters could not be retrieved from the {}"
                              .format(self.fileName))
         else:
-            self.data = data
+           
             if self.runNo > 0:
                 # FIXME reloading another file on already opened not properly working
                 # user has to close open window and reopen file for such a case
@@ -1800,12 +2039,8 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 # defining the x scale for plotting
                 # this is the min/max + 10% of the difference between the min and max
-                min_max_diff = max(self.parVals['RADI']) - min(self.parVals['RADI'])
-                percentage_of_min_max_diff = 0.1 * min_max_diff
-                lower_bound = min(self.parVals['RADI']) - percentage_of_min_max_diff
-                upper_bound = max(self.parVals['RADI']) + percentage_of_min_max_diff
-                self.xScale = [int(ceil(lower_bound)), int(ceil(upper_bound))]
-                
+                self.xScale = set_plotScale(self.parValsRADI)
+               
                 self.scrollWidth = self.scroll_area_content.width()
                 self.scrollHeight = self.scroll_area_content.height()
 
@@ -1833,17 +2068,8 @@ class MainWindow(QtWidgets.QMainWindow):
                             for j in range(int(diff)):
                                 self.parVals[key].append(val[-1])
 
+                    self.yScale[key] = set_plotScale(self.parVals[key])
                    
-                    min_max_diff = max(self.parVals[key]) - min(self.parVals[key])
-                    percentage_of_min_max_diff = 0.1 * min_max_diff
-                    lower_bound = min(self.parVals[key]) - percentage_of_min_max_diff
-                    upper_bound = max(self.parVals[key]) + percentage_of_min_max_diff
-                    # are the min/max values the same
-                    if np.subtract(max(self.parVals[key]), min(self.parVals[key])) == 0:
-                        self.yScale[key] = [lower_bound/2, upper_bound*1.5]
-                    else:
-                        self.yScale[key] = [lower_bound, upper_bound]
-                    
                     unit = fit_par[key] if key in fit_par.keys() else ""
                     # Do we really need to create all graph widgets here?
                     if key in self.par:
@@ -1859,6 +2085,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.scroll_grid_layout.addWidget(graph_widget, idx, 0)
                 del g_w_to_plot, ordered_dict_items
                 self.runNo+=1
+    
 
     def undoCommand(self):
         global currPar
@@ -2132,7 +2359,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for j in self.gwObjects:
                 if j.par == i:
                     j.parVals = self.parVals[i][:]
-                    j.parValRADI = self.parVals['RADI'][:]
+                    j.parValRADI = self.parValsRADI[i][:]
 
         # FIXME(Samuel 11-06-2018):
         # the comments below will probably be important to keep/implement
@@ -2150,9 +2377,11 @@ class MainWindow(QtWidgets.QMainWindow):
         #        self.parVals[self.par].append(self.parVals[self.par][lastItemIndex])
 
         # defining the x and y scale for plotting
+        self.xScale = set_plotScale(self.gwObjects[0].parValRADI)
+        ''''
         if (np.subtract(max(self.gwObjects[0].parValRADI),
                         min(self.gwObjects[0].parValRADI)) == 0):
-            self.xScale = [-100, 100]
+            self.xScale = set_plotScale(self.gwObjects[0].parValRADI)
         elif ((max(self.gwObjects[0].parValRADI) -
                min(self.gwObjects[0].parValRADI)) <= 100):
             self.xScale = [int(ceil(-2 * max(self.gwObjects[0].parValRADI))),
@@ -2164,7 +2393,7 @@ class MainWindow(QtWidgets.QMainWindow):
                            int(ceil(max(self.gwObjects[0].parValRADI) +
                                     0.1 * (max(self.gwObjects[0].parValRADI) -
                                            min(self.gwObjects[0].parValRADI))))]
-
+        '''
         for i in self.gwObjects:
             if not i.historyList[len(i.historyList)-1] == i.parVals[:]:
                 i.historyList.append(i.parVals[:])
@@ -2317,12 +2546,14 @@ class MainWindow(QtWidgets.QMainWindow):
             parameter,
             self.parVals[parameter],
             self.parValsErr[parameter],
-            self.parVals['RADI'],
+            self.parValsRADI,
             "Yes",
             self.numPrecisionX,
             1,
-            self.initial_width,
-            self.initial_height)
+            self.pyFAT_Configuration,
+            self.Tirific_Template,
+            self.parameterFittingSettings[parameter]
+            )
         
         #new_gwObject.setMinimumSize(int(self.scrollWidth*3./4.),
         #    int(self.scrollHeight/2.))
@@ -2629,6 +2860,18 @@ def logWarnings():
     # warnings_logger.addHandler(logger_file_handler)
     # logger.setLevel(logging.DEBUG)
     # warnings_logger.setLevel(logging.DEBUG)
+
+def set_plotScale(values):
+    min_max_diff = max(values) - min(values)
+    percentage_of_min_max_diff = 0.1 * min_max_diff
+    lower_bound = min(values) - percentage_of_min_max_diff
+    upper_bound = max(values) + percentage_of_min_max_diff
+    # are the min/max values the same
+    if np.subtract(max(values), min(values)) == 0:
+        scale = [lower_bound/2, upper_bound*1.5]
+    else:
+        scale = [lower_bound, upper_bound]
+    return scale
 
 def main():
     logWarnings()
