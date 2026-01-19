@@ -1997,7 +1997,7 @@ class MainWindow(QtWidgets.QMainWindow):
        
         for key in self.parVals:
             if key not in self.parValsErr:
-                self.parValsErr[key] = [float('NaN')]*len(self.parVals[key])
+                self.parValsErr[key] = np.array([float('NaN')]*len(self.parVals[key]), dtype=np.float64)
     def getFittingSettings(self):
         """Fetches fitting settings from .def file
 
@@ -2323,10 +2323,57 @@ class MainWindow(QtWidgets.QMainWindow):
         # get the new values and format it as e.g. [0 20 30 40 50...]
         precision = f'.{numPrecision[0]}{numPrecision[1].lower()}'
         self.Tirific_Template[sKey] = ' '.join([f'{val:{precision}}' for val in newVals])
-        self.Tirific_Template[f'# {sKey}_ERR'] = ' '.join([f'{val:{precision}}' for val in newValsErr])
+        if np.all(np.isnan(newValsErr)):
+            pass
+        else:
+            self.Tirific_Template[f'# {sKey}_ERR'] = ' '.join([f'{val:{precision}}' for val in newValsErr])
         # update fitting settings in the template
-    def updateFitSetting(self, parValsFitSetting, sKey):
-          
+    def updateFitSetting(self, parValsFitSetting, sKey,fitkeys,numPrecision):
+        precision = f'.{numPrecision[0]}{numPrecision[1].lower()}'
+        if not parValsFitSetting['TO_FIT']:
+            return
+        else:
+            fitting_blocks = []
+            interpolation_rings =[]
+            processed = []
+            for ring_num in range(1, self.NUR):
+                ring_key = f"RING_{ring_num}"
+                ring_setting = parValsFitSetting[ring_key]
+                if ring_setting['INTERPOLATION'] and ring_setting['TO_FIT']:
+                    interpolation_rings.append(ring_num)
+                if ring_num in processed:                    
+                    break 
+                if ring_setting['TO_FIT']:
+                    fit_block = {'Parameter': sKey}
+                    if ring_setting['BLOCK_FIT']:
+                        fit_block['RINGS'] = f'{ring_setting["GROUP"][0]}:{ring_setting["GROUP"][1]}'
+                        for i in range(ring_setting['GROUP'][0], ring_setting['GROUP'][1]+1):
+                            processed.append(i)
+                    else:
+                        fit_block['RINGS'] = f'{ring_num}'
+                        processed.append(ring_num)
+                    for keys in fitkeys:
+                        if keys in ['VARY','VARINDX']:
+                            pass
+                        else:
+                            fit_block[keys] = ring_setting[keys]
+                    fitting_blocks.append(fit_block) 
+                else:
+                    processed.append(ring_num)
+            for block in fitting_blocks:
+                self.Tirific_Template['VARY'] += f' {sKey} {block['RINGS']},'
+                for keys in fitkeys:
+                        if keys in ['VARY','VARINDX']:
+                            pass
+                        else:
+                            if block[keys] is None:
+                                self.Tirific_Template[keys] += ' '
+                            else:
+                                self.Tirific_Template[keys] += f'{block[keys]:{precision}}'
+            self.Tirific_Template['VARY'] = self.Tirific_Template['VARY'].rstrip(',')
+            self.Tirific_Template['VARINDX'] += f' {sKey} {' '.join([f'{x}' for x in interpolation_rings])}'            
+            
+
 
     def saveAll(self):
         """Save changes made to data point to .def file for all parameters
@@ -2341,10 +2388,19 @@ class MainWindow(QtWidgets.QMainWindow):
         The saveFile function is called and updated with the current values being
         held by parameters.
         """
-        self.dat
+        self.saveParameter(self.parValsRADI,np.array([float('NaN')]*len(self.parValsRADI))
+                ,'RADI', self.numPrecisionX)
+        #Fitting keys
+        fitting_keys = ['VARY','VARINDX','MODERATE','DELEND','DELSTART'
+            'MINDELTA','PARMAX','PARMIN','SATDELT','ITESTART','ITEEND']
+        # Reset the fitting parameters
+        for fit_key in fitting_keys:
+            self.Tirific_Template[fit_key]= ''      
         for i in self.gwObjects:
-            self.saveFile(i.parVals,i.parValsErr,i.parameterFitSetting,
-                i.par, i.unitMeas, i.numPrecisionX, i.numPrecisionY)
+            self.saveParameter(i.parVals,i.parValsErr,
+                i.par, i.numPrecisionY)
+            self.updateFitSetting(i.parameterFitSetting, i.par,
+                fitting_keys, i.numPrecisionY)
 
         self.saveMessage()
 
