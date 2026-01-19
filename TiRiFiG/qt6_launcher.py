@@ -354,11 +354,25 @@ def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str |
     QScrollBar::handle:vertical:hover {{ background: rgba(255,255,255,0.28); }}
     QScrollBar:horizontal {{ background: transparent; height: 10px; }}
     QScrollBar::handle:horizontal {{ background: rgba(255,255,255,0.18); border-radius: 5px; min-width: 40px; }}
+    
+    QCheckBox {{ background: transparent; 
+        color: {panel.name()};
+        }}
+    
 
+    QCheckBox::indicator:unchecked {{
+        background: transparent;
+        background-color: transparent;
+        color: white;
+        border: 1px solid #5A5A5A;
+    }}
+    
+    
+   
     QPushButton {{
         background-color: rgba(255,255,255,0.06);
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 8px;
+        border: 0px solid rgba(255,255,255,0.08);
+        border-radius: 0px;
         padding: 6px 10px;
         color: {panel.name()};
     }}
@@ -381,10 +395,11 @@ def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str |
     }}
 
     QToolTip {{
-        background-color: {panel.name()};
-        color: {text.name()};
-        border: 1px solid rgba(255,255,255,0.12);
-        padding: 6px 8px;
+        background: {text.name()};
+        color: {panel.name()};
+        border: 3px solid rgba(255,255,255,0.12);
+        padding: 2px 2px;
+        opacity: 230;
     }}
     """
     app.setStyleSheet(qss)
@@ -466,6 +481,10 @@ class GraphWidget(QtWidgets.QWidget):
     def __init__(self, xScale, yScale, unitMeas, par, parVals,parValsErr, parValRADI,
             key, numPrecisionX, numPrecisionY,initial_width,initial_height):
         super(GraphWidget, self).__init__()
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("background-color: transparent;")
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                           QtWidgets.QSizePolicy.Policy.Expanding)
         self.xScale = xScale
         self.yScale = yScale
         self.unitMeas = unitMeas
@@ -479,13 +498,17 @@ class GraphWidget(QtWidgets.QWidget):
         self.key = key
         self.numPrecisionX = numPrecisionX
         self.numPrecisionY = numPrecisionY
-
+        #self.setFixedSize(initial_width, initial_height)
         # Grid Layout
         grid = QtWidgets.QGridLayout()
+        #grid.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        #grid.setStyleSheet("border: 3px solid blue; background-color: rgba(255,0,0,0.1);")
+     
         self.setLayout(grid)
         # Canvas and Toolbar
         self.figure = plt.figure()
         self.figure.patch.set_facecolor('none')
+       
         self.figure.patch.set_alpha(0.0)
 
         self.canvas = FigureCanvas(self.figure)
@@ -522,34 +545,32 @@ class GraphWidget(QtWidgets.QWidget):
         #self.btnAddParam.setToolTip('Add Parameter')
 
         # modify plotted parameter
-        self.btnEditParam = QtWidgets.QPushButton('',self)
-        self.btnEditParam.setFixedSize(47,40)
-        self.btnEditParam.setFlat(True)
-        self.btnEditParam.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.btnEditParam.setIcon(QtGui.QIcon(QtGui.QPixmap(str(icons_location/'edit.png'))))
-        self.btnEditParam.setIconSize(QtCore.QSize(47,40))
+      
+        self.btnEditParam = IconButton(icons_location/'edit.png', self)
         
-        self.btnFitPoly = QtWidgets.QPushButton('',self)
-        self.btnFitPoly.setFixedSize(47,40)
-        self.btnFitPoly.setFlat(True)
-        self.btnFitPoly.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.btnFitPoly.setIcon(QtGui.QIcon(QtGui.QPixmap(str(icons_location/'fitpoly.png'))))    
-        self.btnFitPoly.setIconSize(QtCore.QSize(47,40))
+        
+        self.btnFitPoly = IconButton(icons_location/'fitpoly.png', self)
         self.btnFitPoly.clicked.connect(self.changeGlobal)
-        self.btnFitPoly.clicked.connect(
-            self.smoothParameter) 
+        self.btnFitPoly.clicked.connect(self.smoothParameter) 
+        
+        self.btnGroupSelect = IconButton(icons_location/'group.png', self)
+        self.btnGroupSelect.clicked.connect(self.changeGlobal)
+        self.btnGroupSelect.clicked.connect(self.selectGroups) 
+        
+        self.btnInterRings = IconButton(icons_location/'interpolate.png', self)
+        self.btnInterRings.clicked.connect(self.changeGlobal)
+        self.btnInterRings.clicked.connect(self.selectInterRings) 
+        
         #self.btnEditParam.setToolTip('Modify plotted parameter')
 
-        self.btnCloseParam = QtWidgets.QPushButton('',self)
-        self.btnCloseParam.setFixedSize(40, 40)
-        self.btnCloseParam.setIcon(QtGui.QIcon(QtGui.QPixmap(str(icons_location/'close.png'))))
-        self.btnCloseParam.setFlat(True)
-        self.btnCloseParam.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.btnCloseParam.setIconSize(QtCore.QSize(40,40))
+        self.btnCloseParam = IconButton(icons_location/'close.png', self)
+        
         # FIX ME: use icon instead of text
         # self.btnEditParam.setIcon(QtGui.QIcon('utilities/icons/edit.png'))
         self.btnEditParam.setToolTip('Modify plotted parameter')
         self.btnFitPoly.setToolTip('Fit polynomial to data')
+        self.btnGroupSelect.setToolTip('Select groups of rings to Fit')
+        self.btnInterRings.setToolTip('Select rings to fit while interpolating over the rest')
         self.btnCloseParam.setToolTip('Close Window')
 
         # Rounded, icon-like buttons
@@ -563,25 +584,52 @@ class GraphWidget(QtWidgets.QWidget):
         QPushButton:hover { background-color: rgba(255,255,255,0.14); }
         QPushButton:pressed { background-color: rgba(255,255,255,0.22); }
         """
-        self.btnEditParam.setStyleSheet(ctrl_qss)
-        self.btnFitPoly.setStyleSheet(ctrl_qss)
-        self.btnCloseParam.setStyleSheet(ctrl_qss)
+        #self.btnEditParam.setStyleSheet(ctrl_qss)
+        #self.btnFitPoly.setStyleSheet(ctrl_qss)
+        #self.btnGroupSelect.setStyleSheet(ctrl_qss)
+        #self.btnInterRings.setStyleSheet(ctrl_qss)
+        #self.btnCloseParam.setStyleSheet(ctrl_qss)
         hbox = QtWidgets.QHBoxLayout()
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(0)
         hbox_right = QtWidgets.QHBoxLayout()
+        hbox_right.setContentsMargins(0, 0, 0, 0)
+        hbox_right.setSpacing(0)
+        
+        # Add empty spacer widget to align buttons with plot area
+        self.spacer_widget = QtWidgets.QWidget()
+        hbox.addWidget(self.spacer_widget)
+        
         #hbox.addWidget(self.btnAddParam)
         hbox.addWidget(self.btnEditParam)
         hbox.addWidget(self.btnFitPoly)
+        hbox.addWidget(self.btnGroupSelect)
+        hbox.addWidget(self.btnInterRings)
+        hbox.addStretch()
+    
+        hbox_right.addStretch()
         hbox_right.addWidget(self.btnCloseParam)
         grid.addLayout(hbox, 0, 0)
         grid.addLayout(hbox_right, 0, 1)
-        grid.addWidget(self.canvas, 2, 0, 1, 2)
+        grid.addWidget(self.canvas, 1, 0, 1, 2)
 
         self.firstPlot()
+
+    def resizeEvent(self, event):
+        """Update spacer widget width to 15% of cell width"""
+        super().resizeEvent(event)
+        if hasattr(self, 'spacer_widget'):
+            self.spacer_widget.setFixedWidth(int(self.width() * 0.15))
+
     def smoothParameter(self):
         #First we get the desired input
         self.create_polyfit_dialog()
-       
- 
+    def selectGroups(self):
+        QtWidgets.QMessageBox.information(self,'Information','Group selection not yet implemented.')
+
+    def selectInterRings(self):
+        QtWidgets.QMessageBox.information(self,'Information','Selecting the rings to interpolate over not yet implemented.')
+
     def fitPolynomial(self):
         mindegree = int(self.inp.minDegree.currentText())
         maxdegree = int(self.inp.maxDegree.currentText())
@@ -1017,12 +1065,18 @@ class GraphWidget(QtWidgets.QWidget):
                 yerr=self.parValsErr,
                 c='r', linestyle='-', alpha=0.2, zorder=2
             )
-
+       
         self.ax.set_xticks(self.parValRADI)
+        #Make sure to catch the current line in the limits
+        if self.line_current is not None:
+            self.line_current.set_visible(True)
+            self.canvas.draw()
+        ylimits = self.ax.get_ylim()
         # Hide the animated line before the full draw to keep background clean
         if self.line_current is not None:
             self.line_current.set_visible(False)
         # Full draw for non-animated artists (axes, error bars, originals)
+        self.ax.set_ylim(ylimits[0], ylimits[1])
         self.canvas.draw()
         # Cache clean background and then re-blit the current line
         self.background = self.canvas.copy_from_bbox(self.ax.bbox)
@@ -1141,9 +1195,10 @@ class SMWindow(QtWidgets.QWidget):
 
         self.hboxBtns = QtWidgets.QHBoxLayout()
         self.hboxBtns.addStretch(1)
-        self.btnUpdate = QtWidgets.QPushButton('Update', self)
-        self.btnUpdate.clicked.connect(self.updateScale)
-        self.btnCancel = QtWidgets.QPushButton('Cancel', self)
+        self.btnUpdate = IconButton(icons_location/'OK.png', self) 
+        self.btnUpdate.clicked.connect(self.updateScale)     
+        self.btnCancel = IconButton(icons_location/'Cancel.png', self)   
+
         self.btnCancel.clicked.connect(self.close)
         self.hboxBtns.addWidget(self.btnUpdate)
         self.hboxBtns.addWidget(self.btnCancel)
@@ -1200,7 +1255,15 @@ class SMWindow(QtWidgets.QWidget):
             gwObject.firstPlot()
         self.close()
         QtWidgets.QMessageBox.information(self, "Information", "Done!")
-
+class IconButton(QtWidgets.QPushButton):
+    def __init__(self,image_path, parent=None ):
+        super(IconButton, self).__init__('', parent)
+        self.setFixedSize(40, 40)
+        self.setIcon(QtGui.QIcon(QtGui.QPixmap(str(image_path))))
+        self.setFlat(True)
+        self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        self.setIconSize(QtCore.QSize(40,40))
+      
 class PolyFitWindow(QtWidgets.QWidget):
     
     def __init__(self, par):
@@ -1250,16 +1313,16 @@ class PolyFitWindow(QtWidgets.QWidget):
             self.innerFlatrings = QtWidgets.QLineEdit()
             self.grid.addWidget(self.innerFlatringsLabel, 5, 0)
             self.grid.addWidget(self.innerFlatrings, 5, 1)
-        
-        self.btnOK = QtWidgets.QPushButton('OK', self)
-        self.btnCancel = QtWidgets.QPushButton('Cancel', self)
+
+        self.btnOK = IconButton(icons_location/'OK.png', self)       
+        self.btnCancel = IconButton(icons_location/'Cancel.png', self)   
 
         self.hbox = QtWidgets.QHBoxLayout()
-        self.hbox.addStretch(1)
+        #self.hbox.addStretch(1)
         self.hbox.addWidget(self.btnOK)
         self.hbox.addWidget(self.btnCancel)
 
-        self.grid.addLayout(self.hbox, 6, 0)
+        self.grid.addLayout(self.hbox, 6, 0,1,2)
 
         if self.par.split('_')[0] in ['INCL','PA']:
             self.warped = QtWidgets.QCheckBox(text="Fit Angular Momentum Vector?")
@@ -1321,15 +1384,15 @@ class ParamSpec(QtWidgets.QWidget):
             self.grid.addWidget(self.afterLabel, 3, 0)
             self.grid.addWidget(self.afterParameter, 3, 1)
         
-        self.btnOK = QtWidgets.QPushButton('OK', self)
-        self.btnCancel = QtWidgets.QPushButton('Cancel', self)
+        self.btnOK = IconButton(icons_location/'OK.png', self)       
+        self.btnCancel = IconButton(icons_location/'Cancel.png', self)   
 
         self.hbox = QtWidgets.QHBoxLayout()
-        self.hbox.addStretch(1)
+        #self.hbox.addStretch(1)
         self.hbox.addWidget(self.btnOK)
         self.hbox.addWidget(self.btnCancel)
 
-        self.grid.addLayout(self.hbox, 4 if addLocation else 3, 1)
+        self.grid.addLayout(self.hbox, 4 if addLocation else 3, 0,1,2)
         self.setLayout(self.grid)
 
         self.setWindowTitle(windowTitle)
@@ -1345,7 +1408,7 @@ class MainWindow(QtWidgets.QMainWindow):
     loops = 0
     ncols = 5; nrows = 5
     INSET = 'None'
-    par = ['VROT', 'SBR', 'INCL', 'PA']
+    par = ['VROT', 'SBR', 'INCL', 'PA','SDIS','XPOS']
     tmpDeffile = os.getcwd() + "/tmpDeffile.def"
     progressPath = ''
     fileName = ""
@@ -1370,13 +1433,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
         self.initUI()
-        monitors = QtWidgets.QApplication.primaryScreen().availableGeometry()
-        #self.initial_width = monitors.width()*self.initial_size
-        #self.initial_height = monitors.height()*self.initial_size
-        self.initial_height = 1024
-        self.initial_width = 1536
-        self.resize(int(self.initial_width), 
-            int(self.initial_height))
+        # monitor-based sizing was commented out; default to fixed initial dimensions
+        monitor = QtWidgets.QApplication.primaryScreen()
+        monitor_size = monitor.size()
+        self.initial_height = monitor_size.height() * self.initial_size
+        self.initial_width = monitor_size.width() * self.initial_size
+        #self.initial_height = 1024
+        #self.initial_width = 1536
+        
+        self.resize(int(self.initial_width), int(self.initial_height))
         _center(self)
         QtCore.QTimer.singleShot(100, self.openDef)
     
@@ -1390,6 +1455,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central_widget)
         # make this new widget have a vertical layout
         vertical_layout = QtWidgets.QVBoxLayout()
+        vertical_layout.setContentsMargins(0, 0, 0, 0)
+        vertical_layout.setSpacing(0)
         central_widget.setLayout(vertical_layout)
         # add the buttons and the scroll area which will have the graph widgets
         # open button
@@ -1403,11 +1470,19 @@ class MainWindow(QtWidgets.QMainWindow):
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         scroll_area.viewport().setAutoFillBackground(False)
+        scroll_area.setViewportMargins(0, 0, 0, 0)
         # the scroll area needs a widget to be placed inside of it which will hold the content
         # create one and let it have a grid layout
         self.scroll_area_content = QtWidgets.QWidget()
+        self.scroll_area_content.setContentsMargins(0, 0, 0, 0)
         self.scroll_area_content.setAutoFillBackground(False)
         self.scroll_grid_layout = QtWidgets.QGridLayout()
+        self.scroll_grid_layout.setContentsMargins(0, 0, 0, 0)
+        #vertical_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_grid_layout.setSpacing(0)
+        self.scroll_grid_layout.setHorizontalSpacing(0)
+        self.scroll_grid_layout.setVerticalSpacing(0)
+        
         self.scroll_area_content.setLayout(self.scroll_grid_layout)
         scroll_area.setWidget(self.scroll_area_content)
         vertical_layout.addWidget(scroll_area)
@@ -1496,14 +1571,14 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.qApp.quit()
 
     def cleanUp(self):
-
+        #This doesn't do anything at the moment
         # FIXME(Samuel 11-06-2018): Find a way to do this better
 
         self.key = "Yes"
         self.ncols = 5; self.nrows = 5
         self.INSET = 'None'
-        self.par = ['VROT', 'SBR', 'INCL', 'PA']
-        self.unitMeas = ['km/s', 'Jy km/s/sqarcs', 'degrees', 'degrees']
+        self.par = ['VROT', 'SBR', 'INCL', 'PA','SDIS','XPOS']
+        self.unitMeas = ['km/s', 'Jy km/s/sqarcs', 'degrees', 'degrees','km/s','degrees']
         # FIXME use Lib/tempfile.py to create temporary file
         self.tmpDeffile = os.getcwd() + "/tmpDeffile.def"
         self.fileName = ""
@@ -1853,6 +1928,11 @@ class MainWindow(QtWidgets.QMainWindow):
                             if counter == len(sorted_g_w_to_plot) -1 :
                                 break
                             counter += 1
+                    for j in range(self.ncols):
+                        self.scroll_grid_layout.setColumnStretch(j, 1)
+                        self.scroll_grid_layout.setColumnMinimumWidth(j, 0)
+                    for i in range(self.nrows):
+                        self.scroll_grid_layout.setRowStretch(i, 1)
                     del sorted_g_w_to_plot
                 else:
                     QtWidgets.QMessageBox.information(self, "Information",
@@ -2243,8 +2323,11 @@ class MainWindow(QtWidgets.QMainWindow):
             1,
             self.initial_width,
             self.initial_height)
-        new_gwObject.setMinimumSize(int(self.scrollWidth/2),
-            int(self.scrollHeight/2))
+        
+        #new_gwObject.setMinimumSize(int(self.scrollWidth*3./4.),
+        #    int(self.scrollHeight/2.))
+        new_gwObject.setMinimumSize(750,500)
+        #new_gwObject.setFixedSize(1050,500)
         #self.gwObjects[parIndex].btnAddParam.clicked.connect(
         #    self.gwObjects[parIndex].changeGlobal)
         #self.gwObjects[parIndex].btnAddParam.clicked.connect(
@@ -2293,6 +2376,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "This parameter is not defined in the .def file")
             return False
         return True
+    
     def obtain_widget_to_plot(self, parameter, unitMeas): 
         list_of_t_r_p = [gwObject.par for gwObject in self.gwObjects]
         if unitMeas == "":
