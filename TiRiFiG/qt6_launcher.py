@@ -2581,14 +2581,14 @@ class MainWindow(QtWidgets.QMainWindow):
                
                 # Now set the VARINDX in      
                 if len(interpolation_rings) > 0:         
-                    self.Tirific_Template['VARINDX'] += f' {parameter} {' '.join([f'{x}' for x in interpolation_rings])}' 
+                    self.Tirific_Template['VARINDX'] += f' {parameter} {" ".join([f"{x}" for x in interpolation_rings])}' 
         if self.Tirific_Template['VARY'].endswith(','):
             self.Tirific_Template['VARY'] = self.Tirific_Template['VARY'][:-1]           
         for key in self.fitting_parameters:
             print(self.Tirific_Template[key])    
         print(f"Fitting settings updated in template. Superweird")
 
-    def saveAll(self,fileName=None):
+    def saveAll(self):
         """Save changes made to data point to .def file for all parameters
 
         Keyword arguments:
@@ -2656,7 +2656,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
    
 
-    def saveAsAll(self):
+    def saveAsAll(self,name=None):
         """Creates a new .def file for all parameters in current .def file opened
 
         Keyword arguments:
@@ -2669,9 +2669,12 @@ class MainWindow(QtWidgets.QMainWindow):
         The saveAs function is called and updated with the current values being
         held by parameters.
         """
-        self.fileName,_filter = QtWidgets.QFileDialog.getSaveFileName(self, "Save .def file as ",
+        if name is None:
+            self.fileName,_filter = QtWidgets.QFileDialog.getSaveFileName(self, "Save .def file as ",
                                                          os.getcwd(),
                                                          ".def Files (*.def)")
+        else:
+            self.fileName = name
         self.saveAll()
 
     def slotChangeData(self, fileName):
@@ -2749,10 +2752,10 @@ class MainWindow(QtWidgets.QMainWindow):
         text, ok = QtWidgets.QInputDialog.getText(self, "Text Editor Input Dialog",
                                                   "Enter text editor:")
         if ok:
-
-            for i in self.gwObjects:
-                self.saveAs(self.tmpDeffile, i.parVals, i.par, i.unitMeas,
-                            i.numPrecisionX, i.numPrecisionY)
+            path, name = os.path.split(self.fileName)
+            self.tmpDeffile = os.path.join(path, "TiRiFiG_temp.def")
+            self.saveAsAll(self.tmpDeffile)
+           
 
             if text:
                 programName = str(text)
