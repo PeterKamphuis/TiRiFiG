@@ -266,7 +266,7 @@ from PyQt6 import QtCore, QtWidgets,QtGui
 import pyFAT_astro.Support.support_functions as FAT_sup
 import TRM_errors.tirshaker.tirshaker as fit_functions
 from pyFAT_astro.Support.modify_template import fit_polynomial,update_disk_angles
-
+from TiRiFiG.classes.classes import CustomMessageBox, CustomInputDialog, IconButton, icons_location, _center
 # --- Modern theme (QSS) -------------------------------------------------------
 def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str | None = None) -> None:
     """Apply a sleek, modern style across the app. Optional background image.
@@ -337,6 +337,10 @@ def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str |
     QWidget[popupBg="true"] {{
         {popup_image_rule}
         background-color: {panel.name()};
+        color: {panel.name()};
+    }}
+    QWidget[popupBg="true"] QLabel {{
+        background-color: transparent;
         color: {panel.name()};
     }}
     QLabel{{
@@ -434,25 +438,9 @@ fit_par = {'VROT':'km s-1',
            'VRAD':'km s-1'
            
            }
-icons_location = import_pack_files('TiRiFiG.utilities.icons')
 example_location = import_pack_files('TiRiFiG.utilities.example')
-def _center(self):
-    """Centers the window
-
-    Keyword arguments:
-    self --         main window being displayed i.e. the current instance of the
-                    mainWindow class
-
-    Returns:
-    None
-
-    With information from the user's desktop, the screen resolution is  gotten
-    and the center point is figured out for which the window is placed.
-    """
-    qr = self.frameGeometry()
-    cp = QtWidgets.QApplication.primaryScreen().availableGeometry().center()
-    qr.moveCenter(cp)
-    self.move(qr.topLeft())
+# Note: icons_location imported from TiRiFiG.classes.classes
+# Note: _center function imported from TiRiFiG.classes.classes
 
 class TimerThread():
     def __init__(self, t, hFunction):
@@ -470,6 +458,8 @@ class TimerThread():
 
     def cancel(self):
         self.thread.cancel()
+
+# Note: CustomInputDialog imported from TiRiFiG.classes.classes
 
 class GraphWidget(QtWidgets.QWidget):
     redo = []
@@ -743,7 +733,7 @@ class GraphWidget(QtWidgets.QWidget):
                             #print(f"Updated {len(rings)} ring(s): TO_FIT=True")
                             ring1,ring2 = self.parameterFitSetting[f"RING_{ring}"]['GROUP']
                             if ring1 != ring2 and  self.parameterFitSetting[f"RING_{ring}"]['BLOCK_FIT'] == True:
-                                  QtWidgets.QMessageBox.information(self, "Information",
+                                  CustomMessageBox.information(self, "Information",
                                     f"Cannot disable fitting of ring {ring} as it is part of a block fit group ({ring1}-{ring2}).\n"
                                     "Please modify the group first to disable block fitting.")
                             else:
@@ -869,7 +859,7 @@ class GraphWidget(QtWidgets.QWidget):
 
         def _error(msg: str):
             try:
-                QtWidgets.QMessageBox.critical(self, "Fit Error", msg)
+                CustomMessageBox.critical(self, "Fit Error", msg)
             finally:
                 if self._progress is not None:
                     self._progress.reset()
@@ -980,7 +970,7 @@ class GraphWidget(QtWidgets.QWidget):
             self.mDblPress[0] = event.xdata
             self.mDblPress[1] = event.ydata
             
-            text, ok = QtWidgets.QInputDialog.getText(self, 'Input Dialog',
+            text, ok = CustomInputDialog.getText(self, 'Input Dialog',
                                                   'Enter new node value:')
             if ok:
                 if text:
@@ -998,8 +988,15 @@ class GraphWidget(QtWidgets.QWidget):
 
                     # append the new point to the history if the last item in history differs
                     # from the new point
-                    if not self.historyList[len(self.historyList)-1] == self.parVals[:]:
-                        self.historyList.append(self.parVals[:])
+                    # Use numpy-safe equality check to avoid ambiguous truth value errors
+                    try:
+                        if not np.array_equal(np.asarray(self.historyList[-1]), np.asarray(self.parVals)):
+                            # Preserve existing behaviour of copying current values
+                            self.historyList.append(self.parVals[:])
+                    except Exception:
+                        # Fallback to list comparison if types are non-numpy
+                        if not (self.historyList[-1] == self.parVals[:]):
+                            self.historyList.append(self.parVals[:])
 
             self.mPress[0] = None
             self.mPress[1] = None
@@ -1091,7 +1088,7 @@ class GraphWidget(QtWidgets.QWidget):
                         elif self.fit_toggle_mode == 2:
                             ring1,ring2 = self.parameterFitSetting[ring_key]['GROUP']
                             if ring1 != ring2 and  self.parameterFitSetting[ring_key]['BLOCK_FIT'] == True:
-                                QtWidgets.QMessageBox.information(self, "Information",
+                                CustomMessageBox.information(self, "Information",
                                     f"Cannot disable fitting of ring {j+1} as it is part of a block fit group.\n"
                                     "Please modify the group first to disable block fitting.")
                                 return     
@@ -1242,7 +1239,7 @@ class GraphWidget(QtWidgets.QWidget):
 
         Displays a messagebox that informs user there's no previous action to be undone
         """
-        QtWidgets.QMessageBox.information(self, "Information", "History list is exhausted")
+        CustomMessageBox.information(self, "Information", "History list is exhausted")
 
 
     def firstPlot(self):
@@ -1525,80 +1522,10 @@ class SMWindow(QtWidgets.QWidget):
             gwObject.xScale = [self.xMinVal, self.xMaxVal]
             gwObject.firstPlot()
         self.close()
-        QtWidgets.QMessageBox.information(self, "Information", "Done!")
-class IconButton(QtWidgets.QPushButton):
-    def __init__(self,image_path, parent=None, start_grayscale=False, support_three_states=False, extra_icon_path=None):
-        super(IconButton, self).__init__('', parent)
-        self.setFixedSize(40, 40)
-        self.image_path = image_path
-        self.original_pixmap = QtGui.QPixmap(str(image_path))
-        if extra_icon_path is not None:
-            self.original_pixmap_extra = QtGui.QPixmap(str(extra_icon_path))
-        self.is_grayscale = start_grayscale
-        self.support_three_states = support_three_states
-        self.state = 0 if start_grayscale else 1
-        
-        if start_grayscale:
-            self._apply_grayscale()
-        else:
-            self.setIcon(QtGui.QIcon(self.original_pixmap))
-        
-        self.setFlat(True)
-        self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.setIconSize(QtCore.QSize(40,40))
-    
-    def _apply_grayscale(self):
-        """Convert icon to grayscale"""
-        image = self.original_pixmap.toImage()
-        for x in range(image.width()):
-            for y in range(image.height()):
-                pixel = image.pixelColor(x, y)
-                gray = int(0.299 * pixel.red() + 0.587 * pixel.green() + 0.114 * pixel.blue())
-                image.setPixelColor(x, y, QtGui.QColor(gray, gray, gray, pixel.alpha()))
-        self.setIcon(QtGui.QIcon(QtGui.QPixmap.fromImage(image)))
-    
-    def _apply_red_glow(self):
-        """Apply red glow/overlay to icon"""
-        image = self.original_pixmap.toImage()
-        for x in range(image.width()):
-            for y in range(image.height()):
-                pixel = image.pixelColor(x, y)
-                red = min(255, pixel.red() + 100)
-                green = int(pixel.green() * 0.5)
-                blue = int(pixel.blue() * 0.5)
-                image.setPixelColor(x, y, QtGui.QColor(red, green, blue, pixel.alpha()))
-        self.setIcon(QtGui.QIcon(QtGui.QPixmap.fromImage(image)))
-    
-    def set_state(self, state):
-        """Set button state: 0=grayscale, 1=normal, 2=red glow"""
-        self.state = state
-        if state == 0:
-            self._apply_grayscale()
-        elif state == 1:
-            self.setIcon(QtGui.QIcon(self.original_pixmap))
-        elif state == 2:
-            self.setIcon(QtGui.QIcon(self.original_pixmap_extra))
-    
-    def cycle_state(self):
-        """Cycle through states"""
-        if self.support_three_states:
-            self.state = (self.state + 1) % 3
-        else:
-            self.state = 1 - self.state
-        self.set_state(self.state)
-    
-    def set_grayscale(self, grayscale):
-        """Toggle between grayscale and full color"""
-        self.is_grayscale = grayscale
-        if grayscale:
-            self._apply_grayscale()
-        else:
-            self.setIcon(QtGui.QIcon(self.original_pixmap))
-    
-    def toggle_grayscale(self):
-        """Toggle grayscale state"""
-        self.set_grayscale(not self.is_grayscale)
-      
+        CustomMessageBox.information(self, "Information", "Done!")
+
+# Note: IconButton imported from TiRiFiG.classes.classes
+
 class PolyFitWindow(QtWidgets.QWidget):
     
     def __init__(self, par):
@@ -2010,7 +1937,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if self.fileName == '':
                 pass
             else:
-                QtWidgets.QMessageBox.information(self, "Information",
+                CustomMessageBox.information(self, "Information",
                                                   "Empty/Invalid file specified")
             return None
         else:
@@ -2242,7 +2169,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
             else:
                 print(e)
-                QtWidgets.QMessageBox.information(self, "Information",
+                CustomMessageBox.information(self, "Information",
                                                   "Tilted-ring fitting parameters not retrieved")
                 logging.info("The tilted-ring parameters could not be retrieved from the {}"
                              .format(self.fileName))
@@ -2251,7 +2178,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.runNo > 0:
             # FIXME reloading another file on already opened not properly working
             # user has to close open window and reopen file for such a case
-            QtWidgets.QMessageBox.information(self, "Information",
+            CustomMessageBox.information(self, "Information",
                                                 "Close app and reopen to load file. Bug "
                                                 "being fixed")
             # self.cleanUp()
@@ -2404,7 +2331,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.scroll_grid_layout.setRowStretch(i, 1)
                     del sorted_g_w_to_plot
                 else:
-                    QtWidgets.QMessageBox.information(self, "Information",
+                    CustomMessageBox.information(self, "Information",
                                                       "Product of rows and columns should"
                                                       " be at least the same as the current number of parameters"
                                                       " on viewgraph")
@@ -2491,7 +2418,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         else:
                             value = float(value_text)
                     except:
-                        QtWidgets.QMessageBox.information(self, "Information",
+                        CustomMessageBox.information(self, "Information",
                                                   f"Invalid value for {key}. Must be a number.")
                         return
                     self.parameterFittingSettings[parameter][key] = value
@@ -2627,7 +2554,7 @@ class MainWindow(QtWidgets.QMainWindow):
         Displays a messagebox that informs user that changes have been successfully
         written to the .def file
         """
-        QtWidgets.QMessageBox.information(self, "Information",
+        CustomMessageBox.information(self, "Information",
                                           "Changes successfully written to file")
 
   
@@ -2740,7 +2667,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 try:
                     run([programName, self.tmpDeffile])
                 except OSError:
-                    QtWidgets.QMessageBox.information(self, "Information",
+                    CustomMessageBox.information(self, "Information",
                                                       "{} is not installed or configured"
                                                       "properly on this system.".format(programName))
             else:
@@ -2752,7 +2679,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def inProgress(self):
         """Displays the information about feature under development
         """
-        QtWidgets.QMessageBox.information(self, "Information",
+        CustomMessageBox.information(self, "Information",
                                           "This feature is under development")
 
     def SMobj(self):
@@ -2905,7 +2832,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def parameter_in_plot(self,parameter):
        
         if parameter in self.par:
-            QtWidgets.QMessageBox.information(self, "Information",
+            CustomMessageBox.information(self, "Information",
                 f"The parameter {parameter} is already displayed")
             return True
         return False
@@ -2914,7 +2841,7 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.parVals[parameter]
         except KeyError:
-            QtWidgets.QMessageBox.information(self, "Information",
+            CustomMessageBox.information(self, "Information",
                 "This parameter is not defined in the .def file")
             return False
         return True
@@ -3052,17 +2979,10 @@ class MainWindow(QtWidgets.QMainWindow):
         Displays a messagebox that informs user that changes have been successfully
         written to the .def file
         """
-        reply = QtWidgets.QMessageBox.warning(
-                self,'Run TiRiFiC Message',
-                message,
-                QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
-                QtWidgets.QMessageBox.StandardButton.Cancel,
-            )
-        if reply == QtWidgets.QMessageBox.StandardButton.Cancel:
-                return False
+        # Use CustomMessageBox.warning which returns True if OK clicked, False if Cancel
+        if not CustomMessageBox.warning(self, 'Run TiRiFiC Message', message):
+            return False
         return
-        QtWidgets.QMessageBox.information(self, "Information",
-                                         message)
 
     def progressBar(self, cmd):
         progress = QtWidgets.QProgressDialog("Operation in progress...",
@@ -3102,7 +3022,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 cmd.kill()
                 break
         progress.setValue(int(float(self.Tirific_Template['LOOPS'])) * 1e6)
-        QtWidgets.QMessageBox.information(self, "Information", message)
+        CustomMessageBox.information(self, "Information", message)
 
     def startTiriFiC(self):
         """Start TiRiFiC
@@ -3135,7 +3055,7 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 cmd = run(["tirific", f"deffile={self.fileName}"], cwd=fileNamePath)
             except OSError:
-                QtWidgets.QMessageBox.information(self, "Information",
+                CustomMessageBox.information(self, "Information",
                                                   "TiRiFiC is not installed or configured"
                                                   " properly on system.")
             else:
