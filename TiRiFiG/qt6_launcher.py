@@ -975,6 +975,36 @@ class GraphWidget(QtWidgets.QWidget):
         # mouse release
 
        
+        if event.dblclick and not event.xdata is None:
+            # Handle double-click FIRST to prevent it from also triggering left-click logic
+            self.mDblPress[0] = event.xdata
+            self.mDblPress[1] = event.ydata
+            
+            text, ok = QtWidgets.QInputDialog.getText(self, 'Input Dialog',
+                                                  'Enter new node value:')
+            if ok:
+                if text:
+                    newVal = float(str(text))
+                    for j in range(len(self.parValRADI)):
+                        if ((self.mDblPress[0] < (self.parValRADI[j])+3) and
+                            (self.mDblPress[0] > (self.parValRADI[j])-3)):
+
+                            self.parVals[j] = newVal
+                            # Update internal data and trigger optimized redraw
+                            self.yScale = set_plotScale(self.parVals)
+                            self.key = "Yes"
+                            self.plotFunc()
+                            break
+
+                    # append the new point to the history if the last item in history differs
+                    # from the new point
+                    if not self.historyList[len(self.historyList)-1] == self.parVals[:]:
+                        self.historyList.append(self.parVals[:])
+
+            self.mPress[0] = None
+            self.mPress[1] = None
+            return  # Exit early to prevent left-click handler from executing
+        
         if event.button == 1 and not event.xdata is None:
             # Disable rectangle selector during interpolation mode
             if self.interpolation_mode and self.rectangle_selector is not None:
@@ -1000,69 +1030,16 @@ class GraphWidget(QtWidgets.QWidget):
                 return
             # identify closest point to drag
             try:
-                distances = [abs(event.xdata - x) for x in self.parValRADI]
+                # Use vectorized NumPy operation instead of list comprehension
+                distances = np.abs(np.array(self.parValRADI) - event.xdata)
                 j = int(np.argmin(distances))
                 # require it to be within a small x-threshold (similar to previous logic)
-                if abs(event.xdata - self.parValRADI[j]) <= 3:
+                if distances[j] <= 3:
                     self.drag_index = j
                 else:
                     self.drag_index = None
             except Exception:
                 self.drag_index = None
-
-        if event.dblclick and not event.xdata is None:
-            self.mDblPress[0] = event.xdata
-            self.mDblPress[1] = event.ydata
-
-            text, ok = QtWidgets.QInputDialog.getText(self, 'Input Dialog',
-                                                  'Enter new node value:')
-            if ok:
-                if text:
-                    newVal = float(str(text))
-                    for j in range(len(self.parValRADI)):
-                        if ((self.mDblPress[0] < (self.parValRADI[j])+3) and
-                            (self.mDblPress[0] > (self.parValRADI[j])-3)):
-
-                            self.parVals[j] = newVal
-                            bottom, top = self.ax.get_ylim()
-                            self.ax.clear()
-                            self.ax.set_xlim(self.xScale[0], self.xScale[1])
-                            max_yvalue = max(self.parVals)
-                            min_yvalue = min(self.parVals)
-
-                            if self._over_and_above(min_yvalue, bottom, 'min'):
-                                bottom = min_yvalue - (0.1*(max_yvalue-min_yvalue))
-                                # this line is optional, only bottom scale should change
-                                top = max_yvalue + (0.1*(max_yvalue-min_yvalue))
-                            elif self._over_and_above(max_yvalue, top, 'max'):
-                                top = max_yvalue + (0.1*(max_yvalue-min_yvalue))
-                                # this line is optional, only top scale should change
-                                bottom = min_yvalue - (0.1*(max_yvalue-min_yvalue))
-                            elif self._almost_equal(min_yvalue, bottom, rel_tol=1e-2):
-                                bottom = min_yvalue - (0.1*(max_yvalue-min_yvalue))
-                                # this line is optional, only bottom scale should change
-                                top = max_yvalue + (0.1*(max_yvalue-min_yvalue))
-                            elif self._almost_equal(max_yvalue, top, rel_tol=1e-2):
-                                top = max_yvalue + (0.1*(max_yvalue-min_yvalue))
-                                # this line is optional, only top scale should change
-                                bottom = min_yvalue - (0.1*(max_yvalue-min_yvalue))
-
-                            self.ax.set_ylim(bottom, top)
-                            self.ax.set_xlabel("RADI (arcsec)")
-                            self.ax.set_ylabel(self.par + "( "+self.unitMeas+ " )")
-                            self.ax.plot(self.parValRADI, self.parVals, '--bo')
-                            self.ax.set_xticks(self.parValRADI)
-                            self.canvas.draw()
-                            self.key = "No"
-                            break
-
-                    # append the new point to the history if the last item in history differs
-                    # from the new point
-                    if not self.historyList[len(self.historyList)-1] == self.parVals[:]:
-                        self.historyList.append(self.parVals[:])
-
-            self.mPress[0] = None
-            self.mPress[1] = None
 
     def getRelease(self, event):
         """Left mouse button is released
@@ -1098,9 +1075,10 @@ class GraphWidget(QtWidgets.QWidget):
                     # Significant mouse movement - not a click
                     pass
                 else:
-                    distances = [abs(event.xdata - x) for x in self.parValRADI]
+                    # Use vectorized NumPy operation instead of list comprehension
+                    distances = np.abs(np.array(self.parValRADI) - event.xdata)
                     j = int(np.argmin(distances))
-                    if abs(event.xdata - self.parValRADI[j]) <= 3:
+                    if distances[j] <= 3:
                         # Toggle interpolation for this ring
                         ring_key = f"RING_{j+1}"
                         
