@@ -244,8 +244,17 @@ classes:
 """
 
 # libraries
-import os, sys, threading, time, logging,pickle
+import os, sys, time, logging,pickle
+from xml.parsers.expat import errors
+import warnings
+
 os.environ["QT_API"] = "pyqt6"
+
+# Suppress Qt painting-related warnings from matplotlib blitting
+warnings.filterwarnings("ignore", message=".*Recursive repaint detected.*")
+warnings.filterwarnings("ignore", message=".*Paint device returned engine.*")
+warnings.filterwarnings("ignore", message=".*Painter not active.*")
+
 from subprocess import Popen as run
 from math import ceil
 from decimal import Decimal
@@ -259,6 +268,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvas
 import matplotlib.pyplot as plt
 from matplotlib import style
 from matplotlib.widgets import RectangleSelector
+from matplotlib.patches import Rectangle
 import matplotlib.markers as mmarkers
   
 style.use("seaborn-v0_8")
@@ -266,7 +276,7 @@ from PyQt6 import QtCore, QtWidgets,QtGui
 import pyFAT_astro.Support.support_functions as FAT_sup
 import TRM_errors.tirshaker.tirshaker as fit_functions
 from pyFAT_astro.Support.modify_template import fit_polynomial,update_disk_angles
-
+from TiRiFiG.classes.classes import CustomMessageBox, CustomInputDialog, IconButton, icons_location, _center
 # --- Modern theme (QSS) -------------------------------------------------------
 def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str | None = None) -> None:
     """Apply a sleek, modern style across the app. Optional background image.
@@ -337,6 +347,10 @@ def apply_modern_style(app: QtWidgets.QApplication, background_image_path: str |
     QWidget[popupBg="true"] {{
         {popup_image_rule}
         background-color: {panel.name()};
+        color: {panel.name()};
+    }}
+    QWidget[popupBg="true"] QLabel {{
+        background-color: transparent;
         color: {panel.name()};
     }}
     QLabel{{
@@ -434,42 +448,11 @@ fit_par = {'VROT':'km s-1',
            'VRAD':'km s-1'
            
            }
-icons_location = import_pack_files('TiRiFiG.utilities.icons')
 example_location = import_pack_files('TiRiFiG.utilities.example')
-def _center(self):
-    """Centers the window
+# Note: icons_location imported from TiRiFiG.classes.classes
+# Note: _center function imported from TiRiFiG.classes.classes
 
-    Keyword arguments:
-    self --         main window being displayed i.e. the current instance of the
-                    mainWindow class
-
-    Returns:
-    None
-
-    With information from the user's desktop, the screen resolution is  gotten
-    and the center point is figured out for which the window is placed.
-    """
-    qr = self.frameGeometry()
-    cp = QtWidgets.QApplication.primaryScreen().availableGeometry().center()
-    qr.moveCenter(cp)
-    self.move(qr.topLeft())
-
-class TimerThread():
-    def __init__(self, t, hFunction):
-        self.t = t
-        self.hFunction = hFunction
-        self.thread = threading.Timer(self.t, self.handle_function)
-
-    def handle_function(self):
-        self.hFunction()
-        self.thread = threading.Timer(self.t, self.handle_function)
-        self.thread.start()
-
-    def start(self):
-        self.thread.start()
-
-    def cancel(self):
-        self.thread.cancel()
+# Note: CustomInputDialog imported from TiRiFiG.classes.classes
 
 class GraphWidget(QtWidgets.QWidget):
     redo = []
@@ -699,6 +682,64 @@ class GraphWidget(QtWidgets.QWidget):
             # Disable rectangle selector
             print(f"Group selection mode OFF")
 
+    def _break_overlapping_groups(self, selected_rings):
+        """Break up any existing groups that overlap with the newly selected rings.
+        
+        When selecting rings that already belong to a group, this method dissolves
+        that group and creates new groups from the remaining consecutive rings,
+        while maintaining the original BLOCK_FIT setting.
+        """
+        groups_to_break = {}
+        
+        # Find all groups that overlap with selected rings
+        for i in range(len(self.parValRADI)):
+            ring_key = f"RING_{i+1}"
+            if ring_key in self.parameterFitSetting:
+                current_group = self.parameterFitSetting[ring_key]['GROUP']
+                group_rings = set(range(current_group[0], current_group[1] + 1))
+                selected_set = set(selected_rings)
+                
+                # If there's any overlap but not a complete match, mark group for breaking
+                if group_rings & selected_set and group_rings != selected_set:
+                    group_key = tuple(current_group)
+                    if group_key not in groups_to_break:
+                        # Capture the original BLOCK_FIT setting from the first ring in the group
+                        original_block_fit = self.parameterFitSetting[ring_key]['BLOCK_FIT']
+                        groups_to_break[group_key] = {
+                            'all_rings': sorted(list(group_rings)),
+                            'selected': sorted(list(group_rings & selected_set)),
+                            'block_fit': original_block_fit
+                        }
+        
+        # For each group to break, create new groups from remaining rings
+        for group_key, info in groups_to_break.items():
+            all_rings = info['all_rings']
+            selected = set(info['selected'])
+            remaining = [r for r in all_rings if r not in selected]
+            original_block_fit = info['block_fit']
+            
+            if remaining:
+                # Find consecutive sequences in remaining rings
+                sequences = []
+                current_seq = [remaining[0]]
+                
+                for ring in remaining[1:]:
+                    if ring == current_seq[-1] + 1:
+                        current_seq.append(ring)
+                    else:
+                        sequences.append(current_seq)
+                        current_seq = [ring]
+                sequences.append(current_seq)
+                
+                # Apply new groups to remaining rings, maintaining BLOCK_FIT setting
+                for seq in sequences:
+                    new_group = [seq[0], seq[-1]]
+                    for ring in seq:
+                        ring_key = f"RING_{ring}"
+                        self.parameterFitSetting[ring_key]['GROUP'] = new_group
+                        self.parameterFitSetting[ring_key]['BLOCK_FIT'] = original_block_fit
+                    print(f"Rings {seq[0]}-{seq[-1]}: New group formed {new_group}")
+
     def _on_group_select(self, eclick, erelease):
         """Handle rectangle selection - update TO_FIT and INTERPOLATION for selected points"""
         try:
@@ -726,7 +767,11 @@ class GraphWidget(QtWidgets.QWidget):
                 if self.group_selection_mode > 0:                    
                     minring = min(rings)
                     maxring = max(rings)
-                    #print(f"Updated {len(rings)} ring(s): Groups={[minring,maxring]}")
+                    
+                    # Break up existing groups that overlap with the new selection
+                    self._break_overlapping_groups(rings)
+                    
+                    # Apply the new group to selected rings
                     for ring in rings:
                         self.parameterFitSetting[f"RING_{ring}"]['GROUP'] = [minring, maxring]
                         if minring != maxring and self.group_selection_mode == 1:
@@ -743,7 +788,7 @@ class GraphWidget(QtWidgets.QWidget):
                             #print(f"Updated {len(rings)} ring(s): TO_FIT=True")
                             ring1,ring2 = self.parameterFitSetting[f"RING_{ring}"]['GROUP']
                             if ring1 != ring2 and  self.parameterFitSetting[f"RING_{ring}"]['BLOCK_FIT'] == True:
-                                  QtWidgets.QMessageBox.information(self, "Information",
+                                  CustomMessageBox.information(self, "Information",
                                     f"Cannot disable fitting of ring {ring} as it is part of a block fit group ({ring1}-{ring2}).\n"
                                     "Please modify the group first to disable block fitting.")
                             else:
@@ -785,8 +830,9 @@ class GraphWidget(QtWidgets.QWidget):
         if key not in ['VROT']:
             if self.inp.innerFlatrings.text() != '':
                 inner_flatrings = int(float(self.inp.innerFlatrings.text()))
+        errors = np.where(errors == 0, float(self.inp.missing_error.text()), errors)   
+        errors = np.where(np.isnan(errors), float(self.inp.missing_error.text()), errors)   
         
-    
 
         if key in ['INCL','PA']:
             if self.inp.warped.isChecked():
@@ -869,7 +915,7 @@ class GraphWidget(QtWidgets.QWidget):
 
         def _error(msg: str):
             try:
-                QtWidgets.QMessageBox.critical(self, "Fit Error", msg)
+                CustomMessageBox.critical(self, "Fit Error", msg)
             finally:
                 if self._progress is not None:
                     self._progress.reset()
@@ -975,6 +1021,43 @@ class GraphWidget(QtWidgets.QWidget):
         # mouse release
 
        
+        if event.dblclick and not event.xdata is None:
+            # Handle double-click FIRST to prevent it from also triggering left-click logic
+            self.mDblPress[0] = event.xdata
+            self.mDblPress[1] = event.ydata
+            
+            text, ok = CustomInputDialog.getText(self, 'Input Dialog',
+                                                  'Enter new node value:')
+            if ok:
+                if text:
+                    newVal = float(str(text))
+                    for j in range(len(self.parValRADI)):
+                        if ((self.mDblPress[0] < (self.parValRADI[j])+3) and
+                            (self.mDblPress[0] > (self.parValRADI[j])-3)):
+
+                            self.parVals[j] = newVal
+                            # Update internal data and trigger optimized redraw
+                            self.yScale = set_plotScale(self.parVals)
+                            self.key = "Yes"
+                            self.plotFunc()
+                            break
+
+                    # append the new point to the history if the last item in history differs
+                    # from the new point
+                    # Use numpy-safe equality check to avoid ambiguous truth value errors
+                    try:
+                        if not np.array_equal(np.asarray(self.historyList[-1]), np.asarray(self.parVals)):
+                            # Preserve existing behaviour of copying current values
+                            self.historyList.append(self.parVals[:])
+                    except Exception:
+                        # Fallback to list comparison if types are non-numpy
+                        if not (self.historyList[-1] == self.parVals[:]):
+                            self.historyList.append(self.parVals[:])
+
+            self.mPress[0] = None
+            self.mPress[1] = None
+            return  # Exit early to prevent left-click handler from executing
+        
         if event.button == 1 and not event.xdata is None:
             # Disable rectangle selector during interpolation mode
             if self.interpolation_mode and self.rectangle_selector is not None:
@@ -1000,69 +1083,16 @@ class GraphWidget(QtWidgets.QWidget):
                 return
             # identify closest point to drag
             try:
-                distances = [abs(event.xdata - x) for x in self.parValRADI]
+                # Use vectorized NumPy operation instead of list comprehension
+                distances = np.abs(np.array(self.parValRADI) - event.xdata)
                 j = int(np.argmin(distances))
                 # require it to be within a small x-threshold (similar to previous logic)
-                if abs(event.xdata - self.parValRADI[j]) <= 3:
+                if distances[j] <= 3:
                     self.drag_index = j
                 else:
                     self.drag_index = None
             except Exception:
                 self.drag_index = None
-
-        if event.dblclick and not event.xdata is None:
-            self.mDblPress[0] = event.xdata
-            self.mDblPress[1] = event.ydata
-
-            text, ok = QtWidgets.QInputDialog.getText(self, 'Input Dialog',
-                                                  'Enter new node value:')
-            if ok:
-                if text:
-                    newVal = float(str(text))
-                    for j in range(len(self.parValRADI)):
-                        if ((self.mDblPress[0] < (self.parValRADI[j])+3) and
-                            (self.mDblPress[0] > (self.parValRADI[j])-3)):
-
-                            self.parVals[j] = newVal
-                            bottom, top = self.ax.get_ylim()
-                            self.ax.clear()
-                            self.ax.set_xlim(self.xScale[0], self.xScale[1])
-                            max_yvalue = max(self.parVals)
-                            min_yvalue = min(self.parVals)
-
-                            if self._over_and_above(min_yvalue, bottom, 'min'):
-                                bottom = min_yvalue - (0.1*(max_yvalue-min_yvalue))
-                                # this line is optional, only bottom scale should change
-                                top = max_yvalue + (0.1*(max_yvalue-min_yvalue))
-                            elif self._over_and_above(max_yvalue, top, 'max'):
-                                top = max_yvalue + (0.1*(max_yvalue-min_yvalue))
-                                # this line is optional, only top scale should change
-                                bottom = min_yvalue - (0.1*(max_yvalue-min_yvalue))
-                            elif self._almost_equal(min_yvalue, bottom, rel_tol=1e-2):
-                                bottom = min_yvalue - (0.1*(max_yvalue-min_yvalue))
-                                # this line is optional, only bottom scale should change
-                                top = max_yvalue + (0.1*(max_yvalue-min_yvalue))
-                            elif self._almost_equal(max_yvalue, top, rel_tol=1e-2):
-                                top = max_yvalue + (0.1*(max_yvalue-min_yvalue))
-                                # this line is optional, only top scale should change
-                                bottom = min_yvalue - (0.1*(max_yvalue-min_yvalue))
-
-                            self.ax.set_ylim(bottom, top)
-                            self.ax.set_xlabel("RADI (arcsec)")
-                            self.ax.set_ylabel(self.par + "( "+self.unitMeas+ " )")
-                            self.ax.plot(self.parValRADI, self.parVals, '--bo')
-                            self.ax.set_xticks(self.parValRADI)
-                            self.canvas.draw()
-                            self.key = "No"
-                            break
-
-                    # append the new point to the history if the last item in history differs
-                    # from the new point
-                    if not self.historyList[len(self.historyList)-1] == self.parVals[:]:
-                        self.historyList.append(self.parVals[:])
-
-            self.mPress[0] = None
-            self.mPress[1] = None
 
     def getRelease(self, event):
         """Left mouse button is released
@@ -1098,9 +1128,10 @@ class GraphWidget(QtWidgets.QWidget):
                     # Significant mouse movement - not a click
                     pass
                 else:
-                    distances = [abs(event.xdata - x) for x in self.parValRADI]
+                    # Use vectorized NumPy operation instead of list comprehension
+                    distances = np.abs(np.array(self.parValRADI) - event.xdata)
                     j = int(np.argmin(distances))
-                    if abs(event.xdata - self.parValRADI[j]) <= 3:
+                    if distances[j] <= 3:
                         # Toggle interpolation for this ring
                         ring_key = f"RING_{j+1}"
                         
@@ -1113,7 +1144,7 @@ class GraphWidget(QtWidgets.QWidget):
                         elif self.fit_toggle_mode == 2:
                             ring1,ring2 = self.parameterFitSetting[ring_key]['GROUP']
                             if ring1 != ring2 and  self.parameterFitSetting[ring_key]['BLOCK_FIT'] == True:
-                                QtWidgets.QMessageBox.information(self, "Information",
+                                CustomMessageBox.information(self, "Information",
                                     f"Cannot disable fitting of ring {j+1} as it is part of a block fit group.\n"
                                     "Please modify the group first to disable block fitting.")
                                 return     
@@ -1219,6 +1250,87 @@ class GraphWidget(QtWidgets.QWidget):
         else:
             self.showInformation()
 
+    def _draw_group_rectangles(self):
+        """Draw dashed rectangles for each unique group with different colors"""
+        
+        # Define colors for different groups
+        group_colors = [
+            '#FF6B6B',  # Red
+            '#4ECDC4',  # Teal
+            '#45B7D1',  # Blue
+            '#FFA07A',  # Light Salmon
+            '#98D8C8',  # Mint
+            '#F7DC6F',  # Yellow
+            '#BB8FCE',  # Purple
+            '#85C1E2',  # Light Blue
+        ]
+        
+        # Track unique groups and their colors
+        groups_seen = {}
+        group_color_map = {}
+        color_index = 0
+        
+        # Find all unique groups
+        for i in range(len(self.parValRADI)):
+            ring_key = f"RING_{i+1}"
+            if ring_key in self.parameterFitSetting:
+                group = tuple(self.parameterFitSetting[ring_key]['GROUP'])
+                if group not in groups_seen:
+                    groups_seen[group] = True
+                    group_color_map[group] = group_colors[color_index % len(group_colors)]
+                    color_index += 1
+        ring_width = np.diff(self.parValRADI).max()
+        # Draw rectangles for each unique group
+        for group, color in group_color_map.items():
+            if group[0] == group[1]:  # Skip single-ring groups (no need for rectangle)
+                continue
+                
+            min_ring, max_ring = group
+            
+            # Find RADI values for min and max rings
+            min_radi = self.parValRADI[min_ring - 1]-ring_width*0.5
+            max_radi = self.parValRADI[max_ring - 1]+ring_width*0.5
+            
+            # Get y-axis limits
+            if np.isnan(self.parValsErr).any():
+                # If there are NaNs in parValsErr, just use parVals
+                y_min = np.nanmin(self.parVals[min_ring-1:max_ring])
+                y_max = np.nanmax(self.parVals[min_ring-1:max_ring])
+            else:
+                # Use parVals +/- parValsErr for y-limits
+                y_min = np.nanmin(self.parVals[min_ring-1:max_ring] - self.parValsErr[min_ring-1:max_ring])
+                y_max = np.nanmax(self.parVals[min_ring-1:max_ring] + self.parValsErr[min_ring-1:max_ring])
+            y_min *= 0.95  # Add 5% padding below
+            y_max *= 1.05  # Add 5% padding above
+            y_range = y_max - y_min
+            while y_range < 0.1 * np.nanmean(self.parVals):
+                y_min -= 0.05 * np.nanmean(self.parVals)
+                y_max += 0.05 * np.nanmean(self.parVals)
+                y_range = y_max - y_min
+            # Add some padding to height
+            rect_y_min = y_min 
+            rect_height = y_range 
+            
+            # Create rectangle with dashed or dotted lines based on BLOCK_FIT status
+            rect_width = max_radi- min_radi
+            
+            # Check if this group is a block fit or individual fit
+            # Get the first ring in the group to check BLOCK_FIT status
+            first_ring_key = f"RING_{min_ring}"
+            block_fit = self.parameterFitSetting[first_ring_key]['BLOCK_FIT']
+            line_style = '--' if block_fit else ':'  # Dashed for block fit, dotted for individual
+            
+            rect = Rectangle(
+                (min_radi, rect_y_min),
+                rect_width,
+                rect_height,
+                linewidth=2,
+                edgecolor=color,
+                facecolor='none',
+                linestyle=line_style,
+                zorder=1
+            )
+            self.ax.add_patch(rect)
 
     def _get_points(self):
         """Get colors for each point based on TO_FIT and INTERPOLATION status.
@@ -1264,7 +1376,7 @@ class GraphWidget(QtWidgets.QWidget):
 
         Displays a messagebox that informs user there's no previous action to be undone
         """
-        QtWidgets.QMessageBox.information(self, "Information", "History list is exhausted")
+        CustomMessageBox.information(self, "Information", "History list is exhausted")
 
 
     def firstPlot(self):
@@ -1315,6 +1427,9 @@ class GraphWidget(QtWidgets.QWidget):
                 yerr=self.parValsErr,
                 c='r', linestyle='-', alpha=0.2, zorder=2
             )
+        
+        # Draw group rectangles
+        self._draw_group_rectangles()
        
         self.ax.set_xticks(self.parValRADI)
         #Make sure to catch the current line in the limits
@@ -1547,80 +1662,10 @@ class SMWindow(QtWidgets.QWidget):
             gwObject.xScale = [self.xMinVal, self.xMaxVal]
             gwObject.firstPlot()
         self.close()
-        QtWidgets.QMessageBox.information(self, "Information", "Done!")
-class IconButton(QtWidgets.QPushButton):
-    def __init__(self,image_path, parent=None, start_grayscale=False, support_three_states=False, extra_icon_path=None):
-        super(IconButton, self).__init__('', parent)
-        self.setFixedSize(40, 40)
-        self.image_path = image_path
-        self.original_pixmap = QtGui.QPixmap(str(image_path))
-        if extra_icon_path is not None:
-            self.original_pixmap_extra = QtGui.QPixmap(str(extra_icon_path))
-        self.is_grayscale = start_grayscale
-        self.support_three_states = support_three_states
-        self.state = 0 if start_grayscale else 1
-        
-        if start_grayscale:
-            self._apply_grayscale()
-        else:
-            self.setIcon(QtGui.QIcon(self.original_pixmap))
-        
-        self.setFlat(True)
-        self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.setIconSize(QtCore.QSize(40,40))
-    
-    def _apply_grayscale(self):
-        """Convert icon to grayscale"""
-        image = self.original_pixmap.toImage()
-        for x in range(image.width()):
-            for y in range(image.height()):
-                pixel = image.pixelColor(x, y)
-                gray = int(0.299 * pixel.red() + 0.587 * pixel.green() + 0.114 * pixel.blue())
-                image.setPixelColor(x, y, QtGui.QColor(gray, gray, gray, pixel.alpha()))
-        self.setIcon(QtGui.QIcon(QtGui.QPixmap.fromImage(image)))
-    
-    def _apply_red_glow(self):
-        """Apply red glow/overlay to icon"""
-        image = self.original_pixmap.toImage()
-        for x in range(image.width()):
-            for y in range(image.height()):
-                pixel = image.pixelColor(x, y)
-                red = min(255, pixel.red() + 100)
-                green = int(pixel.green() * 0.5)
-                blue = int(pixel.blue() * 0.5)
-                image.setPixelColor(x, y, QtGui.QColor(red, green, blue, pixel.alpha()))
-        self.setIcon(QtGui.QIcon(QtGui.QPixmap.fromImage(image)))
-    
-    def set_state(self, state):
-        """Set button state: 0=grayscale, 1=normal, 2=red glow"""
-        self.state = state
-        if state == 0:
-            self._apply_grayscale()
-        elif state == 1:
-            self.setIcon(QtGui.QIcon(self.original_pixmap))
-        elif state == 2:
-            self.setIcon(QtGui.QIcon(self.original_pixmap_extra))
-    
-    def cycle_state(self):
-        """Cycle through states"""
-        if self.support_three_states:
-            self.state = (self.state + 1) % 3
-        else:
-            self.state = 1 - self.state
-        self.set_state(self.state)
-    
-    def set_grayscale(self, grayscale):
-        """Toggle between grayscale and full color"""
-        self.is_grayscale = grayscale
-        if grayscale:
-            self._apply_grayscale()
-        else:
-            self.setIcon(QtGui.QIcon(self.original_pixmap))
-    
-    def toggle_grayscale(self):
-        """Toggle grayscale state"""
-        self.set_grayscale(not self.is_grayscale)
-      
+        CustomMessageBox.information(self, "Information", "Done!")
+
+# Note: IconButton imported from TiRiFiG.classes.classes
+
 class PolyFitWindow(QtWidgets.QWidget):
     
     def __init__(self, par):
@@ -1650,6 +1695,8 @@ class PolyFitWindow(QtWidgets.QWidget):
         else:
             self.innerFlatringsLabel = QtWidgets.QLabel("Inner Flat Rings")
             self.innerFlatrings = QtWidgets.QLineEdit()
+        self.missing_errorLabel = QtWidgets.QLabel("Default Error")
+        self.missing_error = QtWidgets.QLineEdit()
         self.grid = QtWidgets.QGridLayout()
         self.grid.setSpacing(10)
         self.grid.addWidget(self.minDegreeLabel, 1, 0)
@@ -1660,16 +1707,18 @@ class PolyFitWindow(QtWidgets.QWidget):
         self.grid.addWidget(self.lowerBoundary, 3, 1)
         self.grid.addWidget(self.upperBoundaryLabel, 4, 0)
         self.grid.addWidget(self.upperBoundary, 4, 1)
+        self.grid.addWidget(self.missing_errorLabel, 5, 0)
+        self.grid.addWidget(self.missing_error, 5, 1)
         if self.par.split('_')[0] in ['VROT']:
             self.flatOuterRingsLabel = QtWidgets.QLabel("Number of Outer Flat Rings")
             self.flatOuterRings = QtWidgets.QLineEdit()
-            self.grid.addWidget(self.flatOuterRingsLabel, 5, 0)
-            self.grid.addWidget(self.flatOuterRings, 5, 1)
+            self.grid.addWidget(self.flatOuterRingsLabel, 6, 0)
+            self.grid.addWidget(self.flatOuterRings, 6, 1)
         else:
             self.innerFlatringsLabel = QtWidgets.QLabel("Inner Flat Rings")
             self.innerFlatrings = QtWidgets.QLineEdit()
-            self.grid.addWidget(self.innerFlatringsLabel, 5, 0)
-            self.grid.addWidget(self.innerFlatrings, 5, 1)
+            self.grid.addWidget(self.innerFlatringsLabel, 6, 0)
+            self.grid.addWidget(self.innerFlatrings, 6, 1)
 
         self.btnOK = IconButton(icons_location/'OK.png', self)       
         self.btnCancel = IconButton(icons_location/'cancel.png', self)   
@@ -1679,11 +1728,11 @@ class PolyFitWindow(QtWidgets.QWidget):
         self.hbox.addWidget(self.btnOK)
         self.hbox.addWidget(self.btnCancel)
 
-        self.grid.addLayout(self.hbox, 6, 0,1,2)
+        self.grid.addLayout(self.hbox, 7, 0,1,2)
 
         if self.par.split('_')[0] in ['INCL','PA']:
             self.warped = QtWidgets.QCheckBox(text="Fit Angular Momentum Vector?")
-            self.grid.addWidget(self.warped, 7, 0)
+            self.grid.addWidget(self.warped, 8, 0)
        
 
 
@@ -1948,6 +1997,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # self.paraDef.setStatusTip('Determines which parameter is plotted')
         self.paraDef.triggered.connect(self.add_parameter_dialog)
 
+        self.helpAction = QtGui.QAction("&Help", self)
+        self.helpAction.setShortcut("F1")
+        self.helpAction.setStatusTip('View help information about buttons and features')
+        self.helpAction.triggered.connect(self.showHelp)
+
     def createMenus(self):
         mainMenu = self.menuBar()
 
@@ -1972,6 +2026,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.prefMenu.addAction(self.scaleMan)
         #self.prefMenu.addAction(self.paraDef)
         self.prefMenu.addAction(self.winSpec)
+
+        self.helpMenu = mainMenu.addMenu('&Help')
+        self.helpMenu.addAction(self.helpAction)
 
     def quitApp(self):
         if self.t != 0:
@@ -2032,7 +2089,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if self.fileName == '':
                 pass
             else:
-                QtWidgets.QMessageBox.information(self, "Information",
+                CustomMessageBox.information(self, "Information",
                                                   "Empty/Invalid file specified")
             return None
         else:
@@ -2249,10 +2306,15 @@ class MainWindow(QtWidgets.QMainWindow):
         """
        
         self.data = self.getData()
+        if self.data is None:
+            CustomMessageBox.information(self, "Information",
+                                                  "Tilted-ring fitting parameters not retrieved")
+            return
         self.Tirific_Template = FAT_sup.tirific_template(self.fileName)
-      
+
         #self.getParameter(data)
         #try:
+
         self.getParameter()
         self.setPFConfig()
         print(f'Obtained the Parameters from {self.fileName}')
@@ -2264,7 +2326,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
             else:
                 print(e)
-                QtWidgets.QMessageBox.information(self, "Information",
+                CustomMessageBox.information(self, "Information",
                                                   "Tilted-ring fitting parameters not retrieved")
                 logging.info("The tilted-ring parameters could not be retrieved from the {}"
                              .format(self.fileName))
@@ -2273,7 +2335,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.runNo > 0:
             # FIXME reloading another file on already opened not properly working
             # user has to close open window and reopen file for such a case
-            QtWidgets.QMessageBox.information(self, "Information",
+            CustomMessageBox.information(self, "Information",
                                                 "Close app and reopen to load file. Bug "
                                                 "being fixed")
             # self.cleanUp()
@@ -2426,7 +2488,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.scroll_grid_layout.setRowStretch(i, 1)
                     del sorted_g_w_to_plot
                 else:
-                    QtWidgets.QMessageBox.information(self, "Information",
+                    CustomMessageBox.information(self, "Information",
                                                       "Product of rows and columns should"
                                                       " be at least the same as the current number of parameters"
                                                       " on viewgraph")
@@ -2513,7 +2575,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         else:
                             value = float(value_text)
                     except:
-                        QtWidgets.QMessageBox.information(self, "Information",
+                        CustomMessageBox.information(self, "Information",
                                                   f"Invalid value for {key}. Must be a number.")
                         return
                     self.parameterFittingSettings[parameter][key] = value
@@ -2649,14 +2711,14 @@ class MainWindow(QtWidgets.QMainWindow):
         Displays a messagebox that informs user that changes have been successfully
         written to the .def file
         """
-        QtWidgets.QMessageBox.information(self, "Information",
+        CustomMessageBox.information(self, "Information",
                                           "Changes successfully written to file")
 
   
 
    
 
-    def saveAsAll(self,name=None):
+    def saveAsAll(self, name=None):
         """Creates a new .def file for all parameters in current .def file opened
 
         Keyword arguments:
@@ -2669,12 +2731,16 @@ class MainWindow(QtWidgets.QMainWindow):
         The saveAs function is called and updated with the current values being
         held by parameters.
         """
-        if name is None:
-            self.fileName,_filter = QtWidgets.QFileDialog.getSaveFileName(self, "Save .def file as ",
+        if not name:
+            fileName, _filter = QtWidgets.QFileDialog.getSaveFileName(self, "Save .def file as ",
                                                          os.getcwd(),
                                                          ".def Files (*.def)")
+            if not fileName:  # User cancelled the dialog
+                return
+            self.fileName = fileName
         else:
             self.fileName = name
+        self.openedfileName = self.fileName
         self.saveAll()
 
     def slotChangeData(self, fileName):
@@ -2762,7 +2828,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 try:
                     run([programName, self.tmpDeffile])
                 except OSError:
-                    QtWidgets.QMessageBox.information(self, "Information",
+                    CustomMessageBox.information(self, "Information",
                                                       "{} is not installed or configured"
                                                       "properly on this system.".format(programName))
             else:
@@ -2774,8 +2840,53 @@ class MainWindow(QtWidgets.QMainWindow):
     def inProgress(self):
         """Displays the information about feature under development
         """
-        QtWidgets.QMessageBox.information(self, "Information",
+        CustomMessageBox.information(self, "Information",
                                           "This feature is under development")
+
+    def showHelp(self):
+        """Display help information about buttons, symbols, and rectangles"""
+        help_text = """
+<h2>TiRiFiG Help - Buttons, Symbols & Rectangles</h2>
+
+<h3>Graph Buttons:</h3>
+<ul>
+<li><b>Group Select</b>: Select groups of rings to fit as a block. Click to toggle on/off. When active, draw rectangles around rings to group them.</li>
+<li><b>Interpolate Rings</b>: Toggle interpolation mode. When active, click individual points to mark them for interpolation.</li>
+<li><b>Fit On/Off</b>: Toggle fitting for selected rings. With three states: auto (gray), fit enabled (color), fit disabled.</li>
+<li><b>Edit Parameter</b>: Edit the current parameter settings and unit measurements.</li>
+<li><b>Close Parameter</b>: Remove the current parameter graph from the display.</li>
+</ul>
+
+<h3>Data Point Symbols:</h3>
+<ul>
+<li><b>● Green Circle</b> (FIT): Point is fitted and not interpolated</li>
+<li><b>▼ Blue Triangle</b> (INT): Point is fitted but interpolated</li>
+<li><b>✕ Red X</b> (NOFIT): Point is not fitted</li>
+</ul>
+
+<h3>Group Rectangles:</h3>
+<ul>
+<li><b>-- Dashed Lines</b>: Group is fitted as a block (BLOCK_FIT enabled)</li>
+<li><b>: Dotted Lines</b>: Group is fitted individually (BLOCK_FIT disabled)</li>
+<li>Rectangle color identifies the group - each unique group has a different color</li>
+<li>Interior is transparent to see the data points clearly</li>
+</ul>
+
+<h3>Selecting and Managing Groups:</h3>
+<ul>
+<li>Click the Group Select button to enable group selection mode</li>
+<li>Draw a rectangle around rings to group them together</li>
+<li>If your selection overlaps an existing group:
+  <ul>
+  <li>Selected rings form a new group</li>
+  <li>Non-selected rings from the old group form new separate groups</li>
+  <li>Original BLOCK_FIT setting is preserved for non-selected groups</li>
+  </ul>
+</li>
+<li>Click Group Select again to turn off selection mode</li>
+</ul>
+"""
+        CustomMessageBox.information(self, "Help - TiRiFiG Guide", help_text)
 
     def SMobj(self):
         self.sm = SMWindow(self.par, self.xScale, self.gwObjects)
@@ -2927,7 +3038,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def parameter_in_plot(self,parameter):
        
         if parameter in self.par:
-            QtWidgets.QMessageBox.information(self, "Information",
+            CustomMessageBox.information(self, "Information",
                 f"The parameter {parameter} is already displayed")
             return True
         return False
@@ -2936,7 +3047,7 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.parVals[parameter]
         except KeyError:
-            QtWidgets.QMessageBox.information(self, "Information",
+            CustomMessageBox.information(self, "Information",
                 "This parameter is not defined in the .def file")
             return False
         return True
@@ -3074,17 +3185,10 @@ class MainWindow(QtWidgets.QMainWindow):
         Displays a messagebox that informs user that changes have been successfully
         written to the .def file
         """
-        reply = QtWidgets.QMessageBox.warning(
-                self,'Run TiRiFiC Message',
-                message,
-                QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
-                QtWidgets.QMessageBox.StandardButton.Cancel,
-            )
-        if reply == QtWidgets.QMessageBox.StandardButton.Cancel:
-                return False
+        # Use CustomMessageBox.warning which returns True if OK clicked, False if Cancel
+        if not CustomMessageBox.warning(self, 'Run TiRiFiC Message', message):
+            return False
         return
-        QtWidgets.QMessageBox.information(self, "Information",
-                                         message)
 
     def progressBar(self, cmd):
         progress = QtWidgets.QProgressDialog("Operation in progress...",
@@ -3124,7 +3228,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 cmd.kill()
                 break
         progress.setValue(int(float(self.Tirific_Template['LOOPS'])) * 1e6)
-        QtWidgets.QMessageBox.information(self, "Information", message)
+        CustomMessageBox.information(self, "Information", message)
 
     def startTiriFiC(self):
         """Start TiRiFiC
@@ -3157,7 +3261,7 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 cmd = run(["tirific", f"deffile={self.fileName}"], cwd=fileNamePath)
             except OSError:
-                QtWidgets.QMessageBox.information(self, "Information",
+                CustomMessageBox.information(self, "Information",
                                                   "TiRiFiC is not installed or configured"
                                                   " properly on system.")
             else:
@@ -3201,6 +3305,10 @@ def set_plotScale(values):
     return scale
 
 def main():
+    # Suppress Qt painting-related warnings from matplotlib blitting
+    import os
+    os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = ''
+    
     logWarnings()
     if os.path.isfile(os.getcwd() + "/tmpDeffile.def"):
         os.remove(os.getcwd() + "/tmpDeffile.def")
