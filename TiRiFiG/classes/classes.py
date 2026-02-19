@@ -1,5 +1,5 @@
 from PyQt6 import QtCore, QtWidgets, QtGui
-
+import threading
 # Import shared utilities from qt6_launcher
 try:
     from importlib.resources import files as import_pack_files
@@ -196,3 +196,20 @@ class CustomInputDialog(QtWidgets.QDialog):
         dialog = CustomInputDialog(parent, title, label)
         result = dialog.exec()
         return dialog.inputField.text(), result == QtWidgets.QDialog.DialogCode.Accepted
+
+class TimerThread():
+    def __init__(self, t, hFunction):
+        self.t = t
+        self.hFunction = hFunction
+        self.thread = threading.Timer(self.t, self.handle_function)
+
+    def handle_function(self):
+        self.hFunction()
+        self.thread = threading.Timer(self.t, self.handle_function)
+        self.thread.start()
+
+    def start(self):
+        self.thread.start()
+
+    def cancel(self):
+        self.thread.cancel()

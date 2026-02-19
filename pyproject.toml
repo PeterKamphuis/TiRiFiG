@@ -33,11 +33,8 @@ Homepage = "https://github.com/PeterKamphuis/TiRiFiG"
 [project.scripts]
 TiRiFiG = "TiRiFiG.TiRiFiG_launcher:main"
 
-
 [tool.hatch.version]
 path = "version.py"
-
-
 
 [tool.hatch.build.targets.sdist]
 include = [
