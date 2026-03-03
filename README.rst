@@ -45,7 +45,7 @@ This package is available on *PYPI*, allowing
 
 .. code-block:: bash
   
-    $ pip install TiRiFiG (This is for now an older version)
+    $ pip install TiRiFiG 
 
 Download and installation notes for TiRiFiC_ is on its website. Once installed, add TiRiFiG to your PYTHONPATH using 
 ``export PATH='path_to_installation_directory:$PATH'``.
