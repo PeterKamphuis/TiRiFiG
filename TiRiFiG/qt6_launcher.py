@@ -466,6 +466,8 @@ class GraphWidget(QtWidgets.QWidget):
     _fit_thread = None
     _fit_worker = None
     _progress = None
+    fitting_params_needed = QtCore.pyqtSignal(str)
+    group_right_clicked = QtCore.pyqtSignal(str, int, int)
 
     def __init__(self, xScale, yScale, unitMeas, par, parVals,parValsErr, parValRADI,
             key, numPrecisionX, numPrecisionY,pyFAT_Configuration,Tirific_Template,
@@ -569,7 +571,10 @@ class GraphWidget(QtWidgets.QWidget):
         self.fit_toggle_mode = 0     
         #self.btnEditParam.setToolTip('Modify plotted parameter')
 
+        self.btnResetParam = IconButton(icons_location/'reset.png', self)
         self.btnCloseParam = IconButton(icons_location/'close.png', self)
+        self.btnResetParam.setFixedSize(self.btnCloseParam.size())
+        self.btnResetParam.setIconSize(self.btnCloseParam.iconSize())
         
         # FIX ME: use icon instead of text
         # self.btnEditParam.setIcon(QtGui.QIcon('utilities/icons/edit.png'))
@@ -578,6 +583,7 @@ class GraphWidget(QtWidgets.QWidget):
         self.btnGroupSelect.setToolTip('Select groups of rings to Fit')
         self.btnInterRings.setToolTip('Select rings to fit while interpolating over the rest')
         self.btnFitOnOff.setToolTip('Select or Toggle Fit Rings On/Off')
+        self.btnResetParam.setToolTip('Reset points to original values')
         self.btnCloseParam.setToolTip('Close Window')
 
         # Rounded, icon-like buttons
@@ -616,12 +622,48 @@ class GraphWidget(QtWidgets.QWidget):
         hbox.addStretch()
     
         hbox_right.addStretch()
+        hbox_right.addWidget(self.btnResetParam)
         hbox_right.addWidget(self.btnCloseParam)
         grid.addLayout(hbox, 0, 0)
         grid.addLayout(hbox_right, 0, 1)
         grid.addWidget(self.canvas, 1, 0, 1, 2)
 
         self.firstPlot()
+
+    def _find_group_at(self, xdata):
+        """Return (min_ring, max_ring) for the group rectangle at data-x, or None."""
+        if not self.parameterFitSetting.get('TO_FIT'):
+            return None
+        if len(self.parValRADI) < 2:
+            return None
+        ring_width = np.diff(self.parValRADI).max()
+        groups_seen = {}
+        for i in range(len(self.parValRADI)):
+            ring_key = f"RING_{i+1}"
+            if ring_key in self.parameterFitSetting:
+                g = tuple(self.parameterFitSetting[ring_key]['GROUP'])
+                if g not in groups_seen:
+                    groups_seen[g] = True
+        for group in groups_seen:
+            min_ring, max_ring = group
+            if min_ring == max_ring:
+                continue
+            min_radi = self.parValRADI[min_ring - 1] - ring_width * 0.5
+            max_radi = self.parValRADI[max_ring - 1] + ring_width * 0.5
+            if min_radi <= xdata <= max_radi:
+                return (min_ring, max_ring)
+        return None
+
+    def reset_parameter_values(self):
+        restored_values = copy.deepcopy(self.originalparVals)
+        if np.array_equal(np.asarray(self.parVals), np.asarray(restored_values)):
+            return
+        self.redo = []
+        self.parVals = restored_values
+        if not np.array_equal(np.asarray(self.historyList[-1]), np.asarray(self.parVals)):
+            self.historyList.append(copy.deepcopy(self.parVals))
+        self.key = "Yes"
+        self.plotFunc()
 
     def resizeEvent(self, event):
         """Update spacer widget width to 15% of cell width"""
@@ -749,7 +791,7 @@ class GraphWidget(QtWidgets.QWidget):
             
             if x1 is None or x2 is None or y1 is None or y2 is None:
                 return
-            
+
             # Ensure x1 < x2 and y1 < y2
             x_min, x_max = min(x1, x2), max(x1, x2)
             y_min, y_max = min(y1, y2), max(y1, y2)
@@ -778,6 +820,18 @@ class GraphWidget(QtWidgets.QWidget):
                             self.parameterFitSetting[f"RING_{ring}"]['BLOCK_FIT'] = True
                         elif self.group_selection_mode == 2:
                             self.parameterFitSetting[f"RING_{ring}"]['BLOCK_FIT'] = False
+                    # If any global fitting parameter is unset, request them now
+                    fitmode_text = str(self.Tirific_Template.get('FITMODE', '0')).split()[0]
+                    try:
+                        fitmode_value = int(float(fitmode_text))
+                    except Exception:
+                        fitmode_value = 0
+                    fitting_keys = ['PARMAX', 'PARMIN', 'MODERATE', 'DELEND', 'DELSTART',
+                                    'MINDELTA', 'SATDELT', 'ITESTART', 'ITEEND']
+                    if fitmode_value == 2:
+                        fitting_keys = [k for k in fitting_keys if k not in ['SATDELT', 'ITESTART', 'ITEEND']]
+                    if any(self.parameterFitSetting.get(k) is None for k in fitting_keys):
+                        self.fitting_params_needed.emit(self.par)
                 if self.fit_toggle_mode > 0:
                     #print(f'These {rings}')
                     for ring in rings:
@@ -815,23 +869,36 @@ class GraphWidget(QtWidgets.QWidget):
             print(f"Interpolation mode OFF")
 
     def fitPolynomial(self):
+        def _lineedit_number(line_edit, default_value, as_int=False):
+            raw_value = line_edit.text().strip()
+            if raw_value == '':
+                raw_value = line_edit.placeholderText().strip()
+            if raw_value == '':
+                return int(default_value) if as_int else float(default_value)
+            try:
+                numeric = float(raw_value)
+            except Exception:
+                numeric = float(default_value)
+            return int(numeric) if as_int else numeric
+
         mindegree = int(float(self.inp.minDegree.currentText()))
         maxdegree = int(float(self.inp.maxDegree.currentText()))
         limits = [0., 0.]
-        if self.inp.lowerBoundary.text() != '':
-            limits[0] = float(self.inp.lowerBoundary.text())
-        if self.inp.upperBoundary.text() != '':
-            limits[1] = float(self.inp.upperBoundary.text())
         values = np.array(self.parVals,float)
         errors = np.array(self.parValsErr,float)
         radii = np.array(self.parValRADI,float)
+        limits[0] = _lineedit_number(self.inp.lowerBoundary, float(np.nanmin(values)))
+        limits[1] = _lineedit_number(self.inp.upperBoundary, float(np.nanmax(values)))
         key = self.par.split('_')[0]
         inner_flatrings = 4
         if key not in ['VROT']:
-            if self.inp.innerFlatrings.text() != '':
-                inner_flatrings = int(float(self.inp.innerFlatrings.text()))
-        errors = np.where(errors == 0, float(self.inp.missing_error.text()), errors)   
-        errors = np.where(np.isnan(errors), float(self.inp.missing_error.text()), errors)   
+            inner_flatrings = _lineedit_number(self.inp.innerFlatrings, inner_flatrings, as_int=True)
+     
+        default_error = 0.1 * float(np.nanmean(values))
+        replace_errors = _lineedit_number(self.inp.missing_error, default_error)
+     
+        errors = np.where(errors == 0, replace_errors, errors)   
+        errors = np.where(np.isnan(errors), replace_errors, errors)   
         
 
         if key in ['INCL','PA']:
@@ -933,7 +1000,11 @@ class GraphWidget(QtWidgets.QWidget):
         return
       
     def create_polyfit_dialog(self):
-        self.inp = PolyFitWindow(self.par)
+        mean_val = float(np.nanmean(self.parVals)) 
+        lower_bound = float(np.nanmin(self.parVals[1:]))
+        upper_bound = float(np.nanmax(self.parVals))  
+        self.inp = PolyFitWindow(self.par, yScale=self.yScale[:], 
+            mean_val=mean_val, lower_boundary=lower_bound, upper_boundary=upper_bound)
         self.inp.show()
         self.inp.btnOK.clicked.connect(self.fitPolynomial)
         self.inp.btnCancel.clicked.connect(self.inp.close)
@@ -1093,6 +1164,11 @@ class GraphWidget(QtWidgets.QWidget):
                     self.drag_index = None
             except Exception:
                 self.drag_index = None
+
+        if event.button == 3 and event.xdata is not None and not event.dblclick:
+            group = self._find_group_at(event.xdata)
+            if group is not None:
+                self.group_right_clicked.emit(self.par, group[0], group[1])
 
     def getRelease(self, event):
         """Left mouse button is released
@@ -1668,7 +1744,8 @@ class SMWindow(QtWidgets.QWidget):
 
 class PolyFitWindow(QtWidgets.QWidget):
     
-    def __init__(self, par):
+    def __init__(self, par, yScale=None, mean_val=None,
+            lower_boundary=None, upper_boundary=None):
         super(PolyFitWindow, self).__init__()
         self.setProperty("popupBg", True)
         # Enable stylesheet background (needed for border-image on top-level QWidget)
@@ -1680,23 +1757,35 @@ class PolyFitWindow(QtWidgets.QWidget):
         for degree in polys:
             self.minDegree.addItem(str(degree))
         self.minDegree.setStyleSheet("QComboBox { combobox-popup: 0; }")
+        self.minDegree.setCurrentIndex(0)  # default min = 1
         self.maxDegreeLabel = QtWidgets.QLabel("Max Degree of Polynomial")
         self.maxDegree = QtWidgets.QComboBox()
         for degree in polys[::-1]:
             self.maxDegree.addItem(str(degree))
         self.maxDegree.setStyleSheet("QComboBox { combobox-popup: 0; }")
+        self.maxDegree.setCurrentIndex(4)  # default max = 4
         self.lowerBoundaryLabel = QtWidgets.QLabel("Lower Boundary Limit")
         self.lowerBoundary = QtWidgets.QLineEdit()
+        self.lowerBoundary.setPlaceholderText(f"{lower_boundary}")
         self.upperBoundaryLabel = QtWidgets.QLabel("Upper Boundary Limit")
         self.upperBoundary = QtWidgets.QLineEdit()
+        self.upperBoundary.setPlaceholderText(f"{upper_boundary}")
+
+
+        # Apply parameter-specific physical boundary defaults
+      
         if self.par.split('_')[0] in ['VROT']:
             self.flatOuterRingsLabel = QtWidgets.QLabel("Number of Outer Flat Rings")
             self.flatOuterRings = QtWidgets.QLineEdit()
+            self.flatOuterRings.setPlaceholderText("1")
         else:
             self.innerFlatringsLabel = QtWidgets.QLabel("Inner Flat Rings")
             self.innerFlatrings = QtWidgets.QLineEdit()
+            self.innerFlatrings.setPlaceholderText("3")
         self.missing_errorLabel = QtWidgets.QLabel("Default Error")
         self.missing_error = QtWidgets.QLineEdit()
+        if mean_val is not None:
+            self.missing_error.setPlaceholderText(f"{0.1 * mean_val:.4g}")
         self.grid = QtWidgets.QGridLayout()
         self.grid.setSpacing(10)
         self.grid.addWidget(self.minDegreeLabel, 1, 0)
@@ -1710,13 +1799,9 @@ class PolyFitWindow(QtWidgets.QWidget):
         self.grid.addWidget(self.missing_errorLabel, 5, 0)
         self.grid.addWidget(self.missing_error, 5, 1)
         if self.par.split('_')[0] in ['VROT']:
-            self.flatOuterRingsLabel = QtWidgets.QLabel("Number of Outer Flat Rings")
-            self.flatOuterRings = QtWidgets.QLineEdit()
             self.grid.addWidget(self.flatOuterRingsLabel, 6, 0)
             self.grid.addWidget(self.flatOuterRings, 6, 1)
         else:
-            self.innerFlatringsLabel = QtWidgets.QLabel("Inner Flat Rings")
-            self.innerFlatrings = QtWidgets.QLineEdit()
             self.grid.addWidget(self.innerFlatringsLabel, 6, 0)
             self.grid.addWidget(self.innerFlatrings, 6, 1)
 
@@ -1775,6 +1860,8 @@ class ParamSpec(QtWidgets.QWidget):
         self.grid.addWidget(self.parameter, 1, 1)
         self.grid.addWidget(self.uMeasLabel, 2, 0)
         self.grid.addWidget(self.unitMeasurement, 2, 1)
+        self.parameterQueue = None
+        self.btnAddParameters = None
         if addLocation:
             self.afterLabel = QtWidgets.QLabel("Add After")
             self.afterParameter = QtWidgets.QComboBox()
@@ -1794,18 +1881,120 @@ class ParamSpec(QtWidgets.QWidget):
         self.btnCancel = IconButton(icons_location/'cancel.png', self)   
 
         self.hbox = QtWidgets.QHBoxLayout()
-        #self.hbox.addStretch(1)
+        self.hbox.addStretch(1)
         self.hbox.addWidget(self.btnOK)
-        self.hbox.addWidget(self.btnCancel)
+        if not addLocation:
+            self.hbox.addWidget(self.btnCancel)
 
         self.grid.addLayout(self.hbox, 4 if addLocation else 3, 0,1,2)
+
+        if addLocation:
+            # Queue area: parameters are added here by OK and can be reordered by drag/drop.
+            self.queueLabel = QtWidgets.QLabel("Parameters To Add")
+            self.parameterQueue = QtWidgets.QListWidget()
+            self.parameterQueue.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
+            self.parameterQueue.setDefaultDropAction(QtCore.Qt.DropAction.MoveAction)
+            self.parameterQueue.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+            self.parameterQueue.setMinimumHeight(120)
+            self.parameterQueue.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+            self.parameterQueue.customContextMenuRequested.connect(self._queue_context_menu)
+            self.parameterQueue.keyPressEvent = self._queue_key_press
+
+            self.btnAddParameters = IconButton(icons_location/'add_parameters.png', self)
+            self.btnAddParameters.setFixedSize(147, 40)
+            self.btnAddParameters.setIconSize(QtCore.QSize(147, 40))
+
+            self.grid.addWidget(self.queueLabel, 5, 0, 1, 2)
+            self.grid.addWidget(self.parameterQueue, 6, 0, 1, 2)
+
+            self.bottomButtons = QtWidgets.QHBoxLayout()
+            self.bottomButtons.addWidget(self.btnAddParameters)
+            self.bottomButtons.addWidget(self.btnCancel)
+            self.grid.addLayout(self.bottomButtons, 7, 0, 1, 2)
+
         self.setLayout(self.grid)
 
         self.setWindowTitle(windowTitle)
-        self.setGeometry(300, 300, 300, 150)
+        self.setGeometry(300, 300, 360, 360 if addLocation else 150)
 
         _center(self)
         self.setFocus()
+
+    def remove_queued_parameter(self, row):
+        """Remove the item at row from the queue and restore it in the dropdown."""
+        if self.parameterQueue is None or row < 0 or row >= self.parameterQueue.count():
+            return
+        item = self.parameterQueue.takeItem(row)
+        data = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict):
+            parameter = str(data.get('parameter', '')).upper()
+            if parameter:
+                # Restore the parameter to the dropdown in alphabetical position
+                existing = [self.parameter.itemText(i) for i in range(self.parameter.count())]
+                if parameter not in existing:
+                    insert_idx = 1  # after "Select Parameter"
+                    for i in range(1, self.parameter.count()):
+                        if self.parameter.itemText(i) > parameter:
+                            insert_idx = i
+                            break
+                    else:
+                        insert_idx = self.parameter.count()
+                    self.parameter.insertItem(insert_idx, parameter)
+
+    def _queue_key_press(self, event):
+        """Delete selected queue item when Delete or Backspace is pressed."""
+        if event.key() in (QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace):
+            row = self.parameterQueue.currentRow()
+            if row >= 0:
+                self.remove_queued_parameter(row)
+        else:
+            QtWidgets.QListWidget.keyPressEvent(self.parameterQueue, event)
+
+    def _queue_context_menu(self, pos):
+        """Show a context menu with a Remove option for the hovered queue item."""
+        item = self.parameterQueue.itemAt(pos)
+        if item is None:
+            return
+        row = self.parameterQueue.row(item)
+        menu = QtWidgets.QMenu(self)
+        remove_action = menu.addAction("Remove")
+        action = menu.exec(self.parameterQueue.viewport().mapToGlobal(pos))
+        if action == remove_action:
+            self.remove_queued_parameter(row)
+
+    def add_queued_parameter(self, parameter, after_parameter):
+        """Append a parameter with its insertion target to the queue."""
+        if self.parameterQueue is None:
+            return
+        label = f"{parameter} (after: {after_parameter})"
+        item = QtWidgets.QListWidgetItem(label)
+        item.setData(QtCore.Qt.ItemDataRole.UserRole, {
+            'parameter': parameter,
+            'after': after_parameter,
+        })
+        self.parameterQueue.addItem(item)
+
+        # Keep the dropdown in sync with queued parameters.
+        idx = self.parameter.findText(parameter, QtCore.Qt.MatchFlag.MatchFixedString)
+        if idx >= 0:
+            self.parameter.removeItem(idx)
+        select_idx = self.parameter.findText("Select Parameter", QtCore.Qt.MatchFlag.MatchFixedString)
+        if select_idx >= 0:
+            self.parameter.setCurrentIndex(select_idx)
+
+    def get_queued_parameters(self):
+        """Return queued (parameter, after) tuples in current list order."""
+        entries = []
+        if self.parameterQueue is None:
+            return entries
+        for i in range(self.parameterQueue.count()):
+            data = self.parameterQueue.item(i).data(QtCore.Qt.ItemDataRole.UserRole)
+            if isinstance(data, dict):
+                entries.append((
+                    str(data.get('parameter', '')).upper(),
+                    str(data.get('after', 'End')),
+                ))
+        return entries
 class _FittingFillDialog(QtWidgets.QDialog):
    
 
@@ -2352,13 +2541,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
             # Show a modal progress dialog while building graphs
             total_params = len(self.parVals)
-            progress = QtWidgets.QProgressDialog("Building graph widgets…", None, 0, total_params, self)
-            progress.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
-            progress.setAutoClose(True)
-            progress.setAutoReset(False)
-            progress.setCancelButton(None)
-            progress.setMinimumDuration(0)
-            progress.show()
+            self.progress = QtWidgets.QProgressDialog("Building graph widgets…", None, 0, total_params, self)
+            self.progress.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+            self.progress.setAutoClose(True)
+            self.progress.setAutoReset(False)
+            self.progress.setCancelButton(None)
+            self.progress.setMinimumDuration(0)
+            self.progress.show()
             QtWidgets.QApplication.processEvents()
 
             # make a dict to save the graph widgets to be plotted
@@ -2368,8 +2557,8 @@ class MainWindow(QtWidgets.QMainWindow):
             # ensure there are the same points for parameters as there are for RADI as
             # specified in NUR parameter
             for param_idx, (key, val) in enumerate(self.parVals.items()):
-                progress.setValue(param_idx)
-                progress.setLabelText(f"Processing parameter {key}…")
+                self.progress.setValue(param_idx)
+                self.progress.setLabelText(f"Processing parameter {key}…")
                 QtWidgets.QApplication.processEvents()
                 
                 diff = self.NUR - len(val)
@@ -2399,7 +2588,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     g_w_to_plot[key] = new_widget
                     del new_widget
             
-            progress.setValue(total_params)
+            self.progress.setValue(total_params)
 
             # retrieve the values in order and build a list of ordered key-value pairs
             ordered_dict_items = [(key, g_w_to_plot[key]) for key in self.par]
@@ -2409,7 +2598,7 @@ class MainWindow(QtWidgets.QMainWindow):
             del g_w_to_plot, ordered_dict_items
             
             # Close the busy dialog
-            progress.close()
+            self.progress.close()
             self.runNo+=1
         
 
@@ -2520,6 +2709,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # update fitting settings in the template
 
     def check_fitting(self):
+        fitmode_text = str(self.Tirific_Template.get('FITMODE', '0')).split()[0]
+        try:
+            fitmode_value = int(float(fitmode_text))
+        except Exception:
+            fitmode_value = 0
+        optional_when_fitmode2 = {'ITESTART', 'ITEEND', 'SATDELT'}
         for parameter in self.parameterFittingSettings:
             parValsFitSetting = self.parameterFittingSettings[parameter]
             if parValsFitSetting['TO_FIT'] == False:
@@ -2527,6 +2722,8 @@ class MainWindow(QtWidgets.QMainWindow):
             ask = False
             for key in self.fitting_parameters:
                 if key not in ['VARY', 'VARINDX']:
+                    if fitmode_value == 2 and key in optional_when_fitmode2:
+                        continue
                     if parValsFitSetting[key] is None:
                         for ring_num in range(1, self.NUR):
                             ring_key = f"RING_{ring_num}"
@@ -2581,6 +2778,78 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.parameterFittingSettings[parameter][key] = value
         self.dialog.close()
         # Now fill in the TO_FIT rings in between
+
+    def show_group_fitting_menu(self, parameter, min_ring, max_ring):
+        """Show a context menu when right-clicking inside a group rectangle."""
+        menu = QtWidgets.QMenu(self)
+        label = f"Edit fitting parameters  (rings {min_ring}\u2013{max_ring})"
+        edit_action = menu.addAction(label)
+        chosen = menu.exec(QtGui.QCursor.pos())
+        if chosen == edit_action:
+            self.edit_group_fitting(parameter, min_ring, max_ring)
+
+    def edit_group_fitting(self, parameter, min_ring, max_ring):
+        """Show fitting dialog pre-populated with ring-specific settings for the group."""
+        parValsFitSetting = self.parameterFittingSettings[parameter]
+        # Build merged settings: ring-specific overrides fall back to global value
+        ring_key = f"RING_{min_ring}"
+        ring_settings = parValsFitSetting.get(ring_key, {})
+        merged = {}
+        for key in self.fitting_parameters:
+            if key not in ['VARY', 'VARINDX']:
+                ring_val = ring_settings.get(key)
+                global_val = parValsFitSetting.get(key)
+                merged[key] = ring_val if ring_val is not None else global_val
+        self._group_edit_context = (parameter, min_ring, max_ring)
+        self.dialog = _FittingFillDialog(parameter, self.fitting_parameters, merged)
+        self.dialog.setWindowTitle(
+            f"Fitting Parameters — {parameter} rings {min_ring}\u2013{max_ring}"
+        )
+        self.dialog.btnOK.clicked.connect(self.dialog.accept)
+        self.dialog.btnCancel.clicked.connect(self.dialog.reject)
+        result = self.dialog.exec()
+        if result == QtWidgets.QDialog.DialogCode.Accepted:
+            self.fill_group_fitting_values()
+
+    def fill_group_fitting_values(self):
+        """Write dialog values to every ring in the group."""
+        parameter, min_ring, max_ring = self._group_edit_context
+        for key in self.fitting_parameters:
+            if key not in ['VARY', 'VARINDX']:
+                value_text = getattr(self.dialog, key).text().strip()
+                if not value_text:
+                    # fall back to placeholder (pre-populated default)
+                    value_text = getattr(self.dialog, key).placeholderText().strip()
+                if value_text:
+                    try:
+                        value = int(float(value_text)) if key in ['ITESTART', 'ITEEND', 'MODERATE'] else float(value_text)
+                    except ValueError:
+                        continue
+                    for ring in range(min_ring, max_ring + 1):
+                        rk = f"RING_{ring}"
+                        if rk in self.parameterFittingSettings[parameter]:
+                            self.parameterFittingSettings[parameter][rk][key] = value
+        self.dialog.close()
+
+    def request_fitting_params(self, parameter):
+        """Show the fitting parameters dialog immediately when a new group is created."""
+        parValsFitSetting = self.parameterFittingSettings[parameter]
+        fitting_keys = [k for k in self.fitting_parameters if k not in ['VARY', 'VARINDX']]
+        fitmode_text = str(self.Tirific_Template.get('FITMODE', '0')).split()[0]
+        try:
+            fitmode_value = int(float(fitmode_text))
+        except Exception:
+            fitmode_value = 0
+        if fitmode_value == 2:
+            fitting_keys = [k for k in fitting_keys if k not in ['SATDELT', 'ITESTART', 'ITEEND']]
+        if not any(parValsFitSetting.get(k) is None for k in fitting_keys):
+            return
+        self.dialog = _FittingFillDialog(parameter, self.fitting_parameters, parValsFitSetting)
+        self.dialog.btnOK.clicked.connect(self.dialog.accept)
+        self.dialog.btnCancel.clicked.connect(self.dialog.reject)
+        result = self.dialog.exec()
+        if result == QtWidgets.QDialog.DialogCode.Accepted:
+            self.fill_fitting_values()
        
 
     def updateFitSettings(self):
@@ -2897,87 +3166,122 @@ class MainWindow(QtWidgets.QMainWindow):
         user_input = self.ps.parameter.currentText().upper()
         unitMeas = str(self.ps.unitMeasurement.text())
         after_parameter = self.ps.afterParameter.currentText().upper()
-        text_loc = ""
         if self.parameter_in_plot(user_input) or not self.parameter_in_data(user_input):
             return
-        if after_parameter == "End":
-            text_loc = "at the end of the current graph" 
+        self._insert_parameter_in_layout(user_input, unitMeas, after_parameter)
+        self.ps.close()
+
+        return                  
+
+    def queueParamDef(self):
+        """Queue one parameter from add dialog; do not add to main window yet."""
+        user_input = self.ps.parameter.currentText().upper()
+        if user_input in ["", "SELECT PARAMETER"]:
+            return
+        if self.parameter_in_plot(user_input) or not self.parameter_in_data(user_input):
+            return
+        after_parameter = self.ps.afterParameter.currentText()
+        self.ps.add_queued_parameter(user_input, after_parameter)
+
+    def addQueuedParameters(self):
+        """Add queued parameters in list order."""
+        unitMeas = str(self.ps.unitMeasurement.text())
+        queued = self.ps.get_queued_parameters()
+        if len(queued) == 0:
+            CustomMessageBox.information(self, "Information", "No queued parameters to add")
+            return
+
+        self.progress.setLabelText("Adding parameters…")
+        self.progress.setMaximum(len(queued))
+        self.progress.setValue(0)
+        self.progress.show()
+        QtWidgets.QApplication.processEvents()
+
+        for idx, (user_input, after_parameter) in enumerate(queued):
+            self.progress.setValue(idx)
+            self.progress.setLabelText(f"Adding parameter {user_input}…")
+            QtWidgets.QApplication.processEvents()
+            if self.parameter_in_plot(user_input) or not self.parameter_in_data(user_input):
+                continue
+            self._insert_parameter_in_layout(user_input, unitMeas, after_parameter)
+
+        self.progress.setValue(len(queued))
+        self.progress.close()
+        self.ps.close()
+
+    def _insert_parameter_in_layout(self, user_input, unitMeas, after_parameter):
+        """Insert one parameter widget into the current grid layout."""
+        after_upper = str(after_parameter).upper()
+        if after_upper == "END":
+            text_loc = "at the end of the current graph"
         else:
-            text_loc = f"after the parameter {after_parameter}"   
-       
-      
-        # check if the inputted parameter value has its plot displayed
-       
+            text_loc = f"after the parameter {after_parameter}"
         print(f"We will add the parameter {user_input} {text_loc}")
 
-        # the graph for the new tilted ring parameter will be inserted after the last plot
-        # We could change this by adding a plot after option in the dialog box
         new_widget = self.obtain_widget_to_plot(user_input, unitMeas)
 
-        #get the currently displayed widgets and their positions
         rows = []
-        columns = [] 
+        columns = []
         after_row = -1
         after_column = -1
         for i in range(self.scroll_grid_layout.count()):
             displayed = self.scroll_grid_layout.itemAt(i).widget()
             row_number, column_number = self.get_widget_location(displayed)
-            if after_parameter != "End":
-                if displayed.par == after_parameter:
-                    after_row = row_number+1
+            if after_upper != "END":
+                if displayed.par == after_upper:
+                    after_row = row_number + 1
                     after_column = column_number
             rows.append(row_number)
             columns.append(column_number)
+
         if after_row == -1:
-            if after_parameter != "End":
-                print(f"We could not find the parameter you specified to insert after. Adding at the end instead.")
-            after_column = max(columns)
-            column_index = [i for i,x in enumerate(columns) if x == after_column]
-            after_row = max([rows[i] for i in column_index])+1
+            if after_upper != "END":
+                print("We could not find the parameter you specified to insert after. Adding at the end instead.")
+            try:
+                after_column = max(columns)
+                column_index = [i for i, x in enumerate(columns) if x == after_column]
+                after_row = max([rows[i] for i in column_index]) + 1
+            except ValueError:
+                # Empty layout: first widget must start at (0, 0)
+                after_column = 0
+                column_index = [0]
+                after_row = 0
+          
         if after_row >= self.nrows:
             after_column += 1
             if after_column == self.ncols:
                 self.ncols += 1
             after_row = 0
-        widgets_to_add = [{'widget': new_widget,
-                          'row': after_row,
-                          'column': after_column}]
+
+        widgets_to_add = [{'widget': new_widget, 'row': after_row, 'column': after_column}]
         remove_start_index = -1
         for i in range(self.scroll_grid_layout.count()):
             displayed = self.scroll_grid_layout.itemAt(i).widget()
             row_number, column_number = self.get_widget_location(displayed)
-            if column_number < after_column or (column_number == after_column and
-                                     row_number < after_row):
+            if column_number < after_column or (column_number == after_column and row_number < after_row):
                 continue
+            if remove_start_index == -1:
+                remove_start_index = i
+            if row_number + 1 < self.nrows:
+                row_number += 1
             else:
-                if remove_start_index == -1:
-                    remove_start_index = i
-                if row_number +1 < self.nrows:
-                    row_number +=1                    
-                else:
-                    row_number = 0
-                    column_number +=1
-                    if column_number > self.ncols:
-                        self.ncols += 1
-                widgets_to_add.append({'widget': displayed,
-                                       'row': row_number,
-                                       'column': column_number})
-        if remove_start_index  > -1:        
-            for i in range(self.scroll_grid_layout.count()-1, remove_start_index-1, -1):
+                row_number = 0
+                column_number += 1
+                if column_number > self.ncols:
+                    self.ncols += 1
+            widgets_to_add.append({'widget': displayed, 'row': row_number, 'column': column_number})
+
+        if remove_start_index > -1:
+            for i in range(self.scroll_grid_layout.count() - 1, remove_start_index - 1, -1):
                 widget_to_remove = self.scroll_grid_layout.itemAt(i).widget()
                 self.scroll_grid_layout.removeWidget(widget_to_remove)
                 widget_to_remove.hide()
                 self.par.remove(widget_to_remove.par)
-        for item in widgets_to_add:
-            self.scroll_grid_layout.addWidget(item['widget'],
-                                              item['row'],
-                                              item['column'])
-            item['widget'].show() 
-            self.par.append(item['widget'].par)
-        del widgets_to_add
-        self.ps.close()
 
-        return                  
+        for item in widgets_to_add:
+            self.scroll_grid_layout.addWidget(item['widget'], item['row'], item['column'])
+            item['widget'].show()
+            self.par.append(item['widget'].par)
       
 
     def create_new_widget(self, parameter,unit):
@@ -3011,11 +3315,16 @@ class MainWindow(QtWidgets.QMainWindow):
             new_gwObject.changeGlobal)
         new_gwObject.btnEditParam.clicked.connect(
             self.editParaObj)
+        new_gwObject.btnResetParam.clicked.connect(
+            new_gwObject.changeGlobal)
+        new_gwObject.btnResetParam.clicked.connect(
+            new_gwObject.reset_parameter_values)
         new_gwObject.btnCloseParam.clicked.connect(
             new_gwObject.changeGlobal)
         new_gwObject.btnCloseParam.clicked.connect(
             self.closeParaObj)         
-                
+        new_gwObject.fitting_params_needed.connect(self.request_fitting_params)
+        new_gwObject.group_right_clicked.connect(self.show_group_fitting_menu)
 
         return new_gwObject
     
@@ -3133,7 +3442,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 val.append(i)    
         self.ps = ParamSpec(val, title,plotted_parameters=self.par,addLocation=add)
         self.ps.show()
-        self.ps.btnOK.clicked.connect(self.paramDef)
+        if add:
+            self.ps.btnOK.clicked.connect(self.queueParamDef)
+            if self.ps.btnAddParameters is not None:
+                self.ps.btnAddParameters.clicked.connect(self.addQueuedParameters)
+        else:
+            self.ps.btnOK.clicked.connect(self.paramDef)
         self.ps.btnCancel.clicked.connect(self.ps.close)
 
     def add_parameter_dialog(self):
@@ -3169,7 +3483,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scroll_grid_layout.removeWidget(widget_to_remove)
         self.scroll_grid_layout.update()
         self.par.remove(currPar)
-        widget_to_remove.close()
+        # Do not keep removed widgets in cache: re-adding should create a fresh widget
+        self.gwObjects = [gw for gw in self.gwObjects if gw is not widget_to_remove]
+        widget_to_remove.deleteLater()
         
        
     def tirificMessage(self,message):
