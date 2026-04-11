@@ -213,3 +213,22 @@ class TimerThread():
 
     def cancel(self):
         self.thread.cancel()
+
+
+class DialogCoordinatorBase:
+    """Common owner/config wiring and utility helpers for dialog coordinators."""
+
+    def __init__(self, owner, fit_par, param_spec_cls, message_box_cls):
+        self.owner = owner
+        self.fit_par = fit_par
+        self.param_spec_cls = param_spec_cls
+        self.message_box_cls = message_box_cls
+
+    def info(self, message):
+        """Show standardized information message box."""
+        self.message_box_cls.information(self.owner, "Information", message)
+
+    @staticmethod
+    def process_events():
+        """Process pending Qt events for responsive progress UI."""
+        QtWidgets.QApplication.processEvents()

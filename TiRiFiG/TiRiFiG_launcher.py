@@ -2,32 +2,33 @@ def main():
     print("Welcome to TiRiFiG Launcher!")
     # Additional launcher code would go here
  
-    #try:
-    from PyQt6 import QtWidgets, QtCore
-    print("PyQt6 is available. Launching GUI...")
+    try:
+        from PyQt6 import QtWidgets, QtCore
+        print("PyQt6 is available. Launching GUI...")
 
-    from TiRiFiG.qt6_launcher import main as main_qt6
-    main_qt6()
-    return
+        from TiRiFiG.launchers.qt6_launcher import main as main_qt6
+        main_qt6()
+        return
         # Code to launch the GUI would go here
-    #except ImportError:
-    #    pass
+    except ImportError:
+        pass
    
     try:
         from PyQt5 import QtWidgets, QtCore
         print("PyQt5 is available. Launching GUI...")
-        from TiRiFiG.qt5_launcher import main as main_qt5
+        from TiRiFiG.launchers.qt5_launcher import main as main_qt5
         main_qt5()
         return
         # Code to launch the GUI would go here
     except ImportError:
         pass
+    
      
     try:
         from PyQt4 import QtGui, QtCore
         print("PyQt4 is available. but the launcher is not up to date")
        
-        from TiRiFiG.qt4_launcher import main as main_qt4
+        from TiRiFiG.launchers.qt4_launcher import main as main_qt4
         main_qt4()
         return
         # Code to launch the GUI would go here
