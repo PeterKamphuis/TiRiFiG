@@ -5,7 +5,7 @@ class GraphWidgetEditDialogService:
     """Encapsulate edit dialog setup and signal wiring for MainWindow."""
 
     @staticmethod
-    def open_edit_dialog(owner, param_spec_cls):
+    def open_edit_dialog(owner, param_spec_cls, on_accept):
         """Create and show the edit dialog for unplotted parameters."""
         values = []
         for parameter_name in owner.parVals:
@@ -15,5 +15,5 @@ class GraphWidgetEditDialogService:
 
         owner.ps = param_spec_cls(values, "Edit Parameter")
         owner.ps.show()
-        owner.ps.btnOK.clicked.connect(owner.editParamDef)
+        owner.ps.btnOK.clicked.connect(on_accept)
         owner.ps.btnCancel.clicked.connect(owner.ps.close)

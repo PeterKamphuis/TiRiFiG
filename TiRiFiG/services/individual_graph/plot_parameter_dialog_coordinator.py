@@ -6,8 +6,9 @@ from TiRiFiG.classes.classes import DialogCoordinatorBase
 class PlotParameterDialogCoordinator(DialogCoordinatorBase):
     """Build and wire ParamSpec for plotting-parameter management."""
 
-    def __init__(self, owner, fit_par, param_spec_cls, message_box_cls):
+    def __init__(self, owner, fit_par, param_spec_cls, message_box_cls, workflow_cls):
         super().__init__(owner, fit_par, param_spec_cls, message_box_cls)
+        self.workflow_cls = workflow_cls
 
     def open_dialog(self, title, add=False):
         owner = self.owner
@@ -33,7 +34,7 @@ class PlotParameterDialogCoordinator(DialogCoordinatorBase):
             if owner.ps.btnAddParameters is not None:
                 owner.ps.btnAddParameters.clicked.connect(self.add_queued_parameters)
         else:
-            owner.ps.btnOK.clicked.connect(owner.paramDef)
+            owner.ps.btnOK.clicked.connect(lambda: self.workflow_cls.param_def(owner))
         owner.ps.btnCancel.clicked.connect(owner.ps.close)
 
     def queue_current_parameter(self):
@@ -42,7 +43,7 @@ class PlotParameterDialogCoordinator(DialogCoordinatorBase):
         user_input = owner.ps.parameter.currentText().upper()
         if user_input in ["", "SELECT PARAMETER"]:
             return
-        if owner.parameter_in_plot(user_input) or not owner.parameter_in_data(user_input):
+        if self.workflow_cls.parameter_in_plot(owner, user_input) or not self.workflow_cls.parameter_in_data(owner, user_input):
             return
         after_parameter = owner.ps.afterParameter.currentText()
         owner.ps.add_queued_parameter(user_input, after_parameter)
@@ -66,9 +67,9 @@ class PlotParameterDialogCoordinator(DialogCoordinatorBase):
             owner.progress.setValue(idx)
             owner.progress.setLabelText(f"Adding parameter {user_input}…")
             self.process_events()
-            if owner.parameter_in_plot(user_input) or not owner.parameter_in_data(user_input):
+            if self.workflow_cls.parameter_in_plot(owner, user_input) or not self.workflow_cls.parameter_in_data(owner, user_input):
                 continue
-            owner._insert_parameter_in_layout(user_input, unit_meas, after_parameter)
+            self.workflow_cls.insert_parameter_in_layout(owner, user_input, unit_meas, after_parameter)
 
         owner.progress.setValue(len(queued))
         owner.progress.close()

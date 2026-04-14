@@ -1,6 +1,7 @@
 """Coordinator for opening and wiring the add-template-parameter dialog."""
 
 from TiRiFiG.classes.classes import DialogCoordinatorBase
+from TiRiFiG.services.individual_graph.plot_scale_helper import set_plot_scale
 from TiRiFiG.services.parameter_trace.template_parameter_dialog_controller import TemplateParameterDialogController
 from TiRiFiG.services.parameter_trace.template_parameter_dialog_presenter import TemplateParameterDialogSignalFacade
 
@@ -10,16 +11,6 @@ class TemplateParameterDialogCoordinator(DialogCoordinatorBase):
 
     def __init__(self, owner, fit_par, param_spec_cls, message_box_cls):
         super().__init__(owner, fit_par, param_spec_cls, message_box_cls)
-
-    @staticmethod
-    def _set_plot_scale(values):
-        min_max_diff = max(values) - min(values)
-        percentage_of_min_max_diff = 0.1 * min_max_diff
-        lower_bound = min(values) - percentage_of_min_max_diff
-        upper_bound = max(values) + percentage_of_min_max_diff
-        if max(values) - min(values) == 0:
-            return [lower_bound / 2, upper_bound * 1.5]
-        return [lower_bound, upper_bound]
 
     def queue_current_parameter(self):
         """Queue one template parameter from dialog selection."""
@@ -67,7 +58,7 @@ class TemplateParameterDialogCoordinator(DialogCoordinatorBase):
             owner.getParameter()
             for key in owner.parVals:
                 if key not in owner.yScale:
-                    owner.yScale[key] = self._set_plot_scale(owner.parVals[key])
+                    owner.yScale[key] = set_plot_scale(owner.parVals[key])
 
         self.info(f"Added {added} parameter(s) to template.")
         owner.ps.close()

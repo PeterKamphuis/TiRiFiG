@@ -13,7 +13,7 @@ helpers used by the launcher entrypoint.
 """
 
 # libraries
-import os, logging,pickle
+import os,pickle
 import warnings
 
 os.environ["QT_API"] = "pyqt6"
@@ -40,9 +40,9 @@ from TiRiFiG.services.parameter_trace.template_parameter_dialog_coordinator impo
 from TiRiFiG.services.fitting.fitting_dialog import FittingFillDialog
 from TiRiFiG.services.fitting.fitting_settings import FittingSettingsBootstrapService
 from TiRiFiG.services.fitting.fitting_workflow_controller import FittingWorkflowController
-from TiRiFiG.services.individual_graph.graph_widget_edit_dialog_service import GraphWidgetEditDialogService
 from TiRiFiG.services.individual_graph.plot_parameter_workflow_controller import PlotParameterWorkflowController
 from TiRiFiG.services.individual_graph.graph_widget_removal_service import GraphWidgetRemovalService
+from TiRiFiG.services.individual_graph.plot_scale_helper import set_plot_scale
 from TiRiFiG.services.individual_graph.scale_manager_window import SMWindow
 from TiRiFiG.services.individual_graph.current_parameter_state import get_current_parameter
 from TiRiFiG.services.tirific.open_def_service import OpenDefService
@@ -54,48 +54,62 @@ from TiRiFiG.services.parameter_trace.param_spec import ParamSpec
 from TiRiFiG.services.tirific.tirific_run_service import TirificRunService
 from TiRiFiG.utilities.parameters.deffile_parameters import DEFFILE_PARAMETERS
     
-selected_option = None
 fit_par = DEFFILE_PARAMETERS
 
 class MainWindow(QtWidgets.QMainWindow):
     """Primary GUI controller for menu actions, plotting workflow, and I/O."""
 
-    runNo = 0
-    key = "Yes"
-    ncols = 5; nrows = 5
-    par = ['VROT', 'SBR', 'INCL', 'PA']
-    tmpDeffile = os.getcwd() + "/tmpDeffile.def"
-    progressPath = ''
-    fileName = ""
-    openedfileName = ""
-    gwObjects = []
-    t = 0
-    scrollWidth = 0; scrollHeight = 0
-    before = 0
-    numPrecisionY = {}
-    numPrecisionX = []
-    NUR = 0
-    data = []
-    parVals = {}
-    parValsErr = {}
-    historyList = {}
-    pyFAT_conf_file = None
-    noise = 0.0
-    beam = [0.0, 0.0, 0.0]
-    channel_width = 0.0
-    xScale = [0, 0]
-    yScale = {'VROT':[0, 0]}
-    mPress = [-5]
-    mRelease = ['None']
-    mMotion = [-5]
-    initial_size = 0.75
-    #Fitting keys
-    fitting_parameters= ['VARY','VARINDX','PARMAX','PARMIN'
-            ,'MODERATE','DELEND','DELSTART',
-            'MINDELTA','SATDELT','ITESTART','ITEEND']
-
     def __init__(self):
         super(MainWindow, self).__init__()
+
+        # Per-window runtime state; keep mutable data on the instance.
+        self.runNo = 0
+        self.key = "Yes"
+        self.ncols = 5
+        self.nrows = 5
+        self.par = ['VROT', 'SBR', 'INCL', 'PA']
+        self.tmpDeffile = os.getcwd() + "/tmpDeffile.def"
+        self.progressPath = ''
+        self.fileName = ""
+        self.openedfileName = ""
+        self.gwObjects = []
+        self.t = 0
+        self.scrollWidth = 0
+        self.scrollHeight = 0
+        self.before = 0
+        self.numPrecisionY = {}
+        self.numPrecisionX = []
+        self.NUR = 0
+        self.data = []
+        self.parVals = {}
+        self.parValsErr = {}
+        self.historyList = {}
+        self.pyFAT_conf_file = None
+        self.pyFAT_config_file = None
+        self.noise = 0.0
+        self.beam = [0.0, 0.0, 0.0]
+        self.channel_width = 0.0
+        self.xScale = [0, 0]
+        self.yScale = {'VROT': [0, 0]}
+        self.mPress = [-5]
+        self.mRelease = ['None']
+        self.mMotion = [-5]
+        self.initial_size = 0.75
+        # Fitting keys
+        self.fitting_parameters = [
+            'VARY',
+            'VARINDX',
+            'PARMAX',
+            'PARMIN',
+            'MODERATE',
+            'DELEND',
+            'DELSTART',
+            'MINDELTA',
+            'SATDELT',
+            'ITESTART',
+            'ITEEND',
+        ]
+
         self.initUI()
         
         # monitor-based sizing was commented out; default to fixed initial dimensions
@@ -444,7 +458,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore,
             QtWidgets,
             np,
-            set_plotScale,
+            set_plot_scale,
             fit_par,
         )
         
@@ -608,7 +622,7 @@ class MainWindow(QtWidgets.QMainWindow):
             fit_par,
             np,
             ceil,
-            set_plotScale,
+            set_plot_scale,
         )
 
     def animate(self):
@@ -686,54 +700,6 @@ class MainWindow(QtWidgets.QMainWindow):
         current_parameter = get_current_parameter()
         self.sm = SMWindow(self.gwObjects, current_parameter)
         self.sm.show()
-  
-    def paramDef(self):
-        PlotParameterWorkflowController.param_def(self)
-
-    def queueParamDef(self):
-        PlotParameterWorkflowController.queue_param_def(self)
-
-    def addQueuedParameters(self):
-        PlotParameterWorkflowController.add_queued_parameters(self)
-
-    def _insert_parameter_in_layout(self, user_input, unitMeas, after_parameter):
-        PlotParameterWorkflowController.insert_parameter_in_layout(
-            self,
-            user_input,
-            unitMeas,
-            after_parameter,
-        )
-      
-
-    def create_new_widget(self, parameter,unit):
-        return PlotParameterWorkflowController.create_new_widget(self, parameter, unit)
-    
-    def get_widget_location(self, widget):
-        """Get the row and column of a widget in the grid layout.
-
-        Keyword arguments:
-        self -- main window being displayed i.e. the current instance of the
-                mainWindow class
-        widget -- the widget whose location is to be found
-
-        Returns:
-        row_number -- the row number of the widget
-        column_number -- the column number of the widget
-        """
-        return PlotParameterWorkflowController.get_widget_location(self, widget)
-        
-    def parameter_in_plot(self,parameter):
-        return PlotParameterWorkflowController.parameter_in_plot(self, parameter)
-
-    def parameter_in_data(self,parameter):       
-        return PlotParameterWorkflowController.parameter_in_data(self, parameter)
-    
-    def obtain_widget_to_plot(self, parameter, unitMeas): 
-        return PlotParameterWorkflowController.obtain_widget_to_plot(self, parameter, unitMeas)
-  
-                
-    def editParamDef(self):
-        PlotParameterWorkflowController.edit_param_def(self)
     
     def create_parameter_dialog(self, opt, title,add=False):
         PlotParameterWorkflowController.create_parameter_dialog(self, opt, title, add=add)
@@ -742,9 +708,8 @@ class MainWindow(QtWidgets.QMainWindow):
         PlotParameterWorkflowController.add_plot_parameter_dialog(self)
 
     def add_parameter_dialog(self):
-        selected_option = 'add'
         title = 'Add Parameter'
-        self.add_parameter_to_def_dialog(selected_option, title,add=True)
+        self.add_parameter_to_def_dialog('add', title, add=True)
 
     def _get_plot_dialog_coordinator(self):
         return PlotParameterWorkflowController.get_plot_dialog_coordinator(self)
@@ -771,12 +736,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._get_template_dialog_coordinator().open_dialog(title, add=add)
 
     def modify_fit_settings_dialog(self):
-        selected_option = 'add'
         title = 'Set Fitting Parameters'
-        self.set_fitting_dialog(selected_option, title,add=False)
-
-    def editParaObj(self):
-        GraphWidgetEditDialogService.open_edit_dialog(self, ParamSpec)
+        self.set_fitting_dialog('add', title, add=False)
 
     def closeParaObj(self):
         #updated in changeGlobal
@@ -801,9 +762,6 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         return TirificRunService.show_run_warning(self, message, CustomMessageBox)
 
-    def progressBar(self, cmd):
-        TirificRunService.run_progress(self, cmd, CustomMessageBox)
-
     def startTiriFiC(self):
         """Start TiRiFiC
 
@@ -816,32 +774,5 @@ class MainWindow(QtWidgets.QMainWindow):
 
         Calls the os.system and opens terminal to start TiRiFiC
         """
-        TirificRunService.start_run(self, run, CustomMessageBox)
+        TirificRunService.start_run(self, CustomMessageBox)
 
-def logWarnings():
-    # logging.captureWarnings(True)
-    # logging.basicConfig(filename='test.log', format='%(asctime)s %(name)s %(levelname)s %(message)s',
-    #                     datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
-    logger = logging.getLogger(__name__)
-    # warnings_logger = logging.getLogger("py.warnings")
-
-    formatter = logging.Formatter('%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
-    logger_file_handler = logging.FileHandler('TiRiFiG.log', mode='a')
-    logger_file_handler.setFormatter(formatter)
-
-    logger.addHandler(logger_file_handler)
-    # warnings_logger.addHandler(logger_file_handler)
-    # logger.setLevel(logging.DEBUG)
-    # warnings_logger.setLevel(logging.DEBUG)
-
-def set_plotScale(values):
-    min_max_diff = max(values) - min(values)
-    percentage_of_min_max_diff = 0.1 * min_max_diff
-    lower_bound = min(values) - percentage_of_min_max_diff
-    upper_bound = max(values) + percentage_of_min_max_diff
-    # are the min/max values the same
-    if np.subtract(max(values), min(values)) == 0:
-        scale = [lower_bound/2, upper_bound*1.5]
-    else:
-        scale = [lower_bound, upper_bound]
-    return scale

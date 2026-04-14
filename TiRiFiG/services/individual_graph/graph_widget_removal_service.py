@@ -10,7 +10,8 @@ class GraphWidgetRemovalService:
         positioned_widgets = []
         for i in range(owner.scroll_grid_layout.count()):
             displayed = owner.scroll_grid_layout.itemAt(i).widget()
-            row_number, column_number = owner.get_widget_location(displayed)
+            idx_in_layout = owner.scroll_grid_layout.indexOf(displayed)
+            row_number, column_number, _row_span, _col_span = owner.scroll_grid_layout.getItemPosition(idx_in_layout)
             positioned_widgets.append((column_number, row_number, displayed))
 
         positioned_widgets.sort(key=lambda item: (item[0], item[1]))

@@ -1,5 +1,7 @@
 """Service for opening a .def file and building initial graph widgets."""
 
+from TiRiFiG.services.individual_graph.plot_parameter_workflow_controller import PlotParameterWorkflowController
+
 
 class OpenDefService:
     """Encapsulate MainWindow.openDef behavior with unchanged flow."""
@@ -88,7 +90,7 @@ class OpenDefService:
 
             unit = fit_parameters[key]["unit"] if key in fit_parameters.keys() else ""
             if key in owner.par:
-                new_widget = owner.create_new_widget(key, unit)
+                new_widget = PlotParameterWorkflowController.create_new_widget(owner, key, unit)
                 owner.gwObjects.append(new_widget)
                 g_w_to_plot[key] = new_widget
                 del new_widget

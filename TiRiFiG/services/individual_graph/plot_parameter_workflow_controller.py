@@ -1,17 +1,16 @@
 """Controller for plot-parameter dialog and widget workflow operations."""
 
-import numpy as np
-
 from TiRiFiG.classes.classes import CustomMessageBox
+from TiRiFiG.services.individual_graph.graph_widget_edit_dialog_service import GraphWidgetEditDialogService
 from TiRiFiG.services.individual_graph.plot_parameter_dialog_coordinator import PlotParameterDialogCoordinator
 from TiRiFiG.services.individual_graph.current_parameter_state import get_current_parameter, set_current_parameter
 from TiRiFiG.services.individual_graph.graph_widget import GraphWidget as IndividualGraphWidget
+from TiRiFiG.services.individual_graph.plot_scale_helper import set_plot_scale
 from TiRiFiG.services.parameter_trace.param_spec import ParamSpec
 from TiRiFiG.services.polynomial_fitting.polyfit_window import PolyFitWindow
 from TiRiFiG.utilities.parameters.deffile_parameters import DEFFILE_PARAMETERS
 
 
-selected_option = None
 fit_par = DEFFILE_PARAMETERS
 
 
@@ -24,16 +23,6 @@ class PlotParameterWorkflowController:
 
         def create_widget(self, parameter, unit):
             return PlotParameterWorkflowController._build_graph_widget(self.owner, parameter, unit)
-
-    @staticmethod
-    def _set_plot_scale(values):
-        min_max_diff = max(values) - min(values)
-        percentage_of_min_max_diff = 0.1 * min_max_diff
-        lower_bound = min(values) - percentage_of_min_max_diff
-        upper_bound = max(values) + percentage_of_min_max_diff
-        if np.subtract(max(values), min(values)) == 0:
-            return [lower_bound / 2, upper_bound * 1.5]
-        return [lower_bound, upper_bound]
 
     @staticmethod
     def param_def(owner):
@@ -218,15 +207,13 @@ class PlotParameterWorkflowController:
 
     @staticmethod
     def create_parameter_dialog(owner, opt, title, add=False):
-        global selected_option
-        selected_option = opt
+        del opt  # preserved for compatibility with existing call sites
         PlotParameterWorkflowController.get_plot_dialog_coordinator(owner).open_dialog(title, add=add)
 
     @staticmethod
     def add_plot_parameter_dialog(owner):
-        selected_option = 'add'
         title = 'Add Plot'
-        PlotParameterWorkflowController.create_parameter_dialog(owner, selected_option, title, add=True)
+        PlotParameterWorkflowController.create_parameter_dialog(owner, 'add', title, add=True)
 
     @staticmethod
     def get_plot_dialog_coordinator(owner):
@@ -237,6 +224,7 @@ class PlotParameterWorkflowController:
                 fit_par,
                 ParamSpec,
                 CustomMessageBox,
+                PlotParameterWorkflowController,
             )
             owner._plot_dialog_coordinator = coordinator
         return coordinator
@@ -268,14 +256,20 @@ class PlotParameterWorkflowController:
             owner.pyFAT_Configuration,
             owner.Tirific_Template,
             owner.parameterFittingSettings[parameter],
-            PlotParameterWorkflowController._set_plot_scale,
+            set_plot_scale,
             PolyFitWindow,
         )
 
         new_widget.setMinimumSize(750, 500)
 
         new_widget.btnEditParam.clicked.connect(new_widget.changeGlobal)
-        new_widget.btnEditParam.clicked.connect(owner.editParaObj)
+        new_widget.btnEditParam.clicked.connect(
+            lambda: GraphWidgetEditDialogService.open_edit_dialog(
+                owner,
+                ParamSpec,
+                on_accept=lambda: PlotParameterWorkflowController.edit_param_def(owner),
+            )
+        )
         new_widget.btnResetParam.clicked.connect(new_widget.changeGlobal)
         new_widget.btnResetParam.clicked.connect(new_widget.reset_parameter_values)
         new_widget.btnCloseParam.clicked.connect(new_widget.changeGlobal)
